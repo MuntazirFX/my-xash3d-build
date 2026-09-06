@@ -158,12 +158,20 @@ jobs:
           APP=payload_root/Payload/xash3d.app
           mkdir -p "$APP"
 
-          # Engine binaries (waf destdir layout: engineart/ios/*)
-          cp -r engineart/ios/* "$APP/"
+          # Engine binaries (waf destdir layout: engineart/build/ios/*)
+          # NOTE: upload-artifact computes a common root across the 3
+          # uploaded paths (engine/build/ios, engine/build/SDL2.framework,
+          # engine/engine/platform/ios/bundle) - that root is "engine/",
+          # so on download everything sits one level deeper than the
+          # original in-job paths: engineart/build/ios/*,
+          # engineart/build/SDL2.framework, and
+          # engineart/engine/platform/ios/bundle/* (this last one already
+          # keeps its "engine/" prefix since it was engine/engine/...).
+          cp -r engineart/build/ios/* "$APP/"
 
           # App metadata + frameworks
           cp engineart/engine/platform/ios/bundle/Info.plist "$APP/"
-          cp -r engineart/SDL2.framework "$APP/"
+          cp -r engineart/build/SDL2.framework "$APP/"
 
           # Each game keeps its own subfolder -> no client.dylib clash
           for g in valve gearbox bshift; do
