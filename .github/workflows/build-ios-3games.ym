@@ -72,10 +72,17 @@ jobs:
       - name: Configure (CMake, iOS target - same flags as FWGS official CI)
         working-directory: gamesrc
         run: |
+          # NOTE: Build type must be "Debug" (not Release) on iOS.
+          # hlsdk-portable's cl_dll/CMakeLists.txt & dlls/CMakeLists.txt run a
+          # POST_BUILD `strip` step only when CMAKE_BUILD_TYPE MATCHES "Release".
+          # On iOS cross-compilation that strip invocation resolves incorrectly
+          # (fails with "no files specified"), so we avoid triggering it
+          # entirely by using Debug here - exactly what FWGS's own
+          # scripts/gha/build_ios.sh does for the same reason.
           cmake -DCMAKE_SYSTEM_NAME=iOS \
                 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
                 -DCMAKE_INSTALL_PREFIX="$(pwd)/../dist/${{ matrix.gamedir }}" \
-                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_BUILD_TYPE=Debug \
                 -B build -S .
 
       - name: Build & install
