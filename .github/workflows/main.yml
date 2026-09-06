@@ -69,20 +69,54 @@ jobs:
           submodules: recursive
           path: gamesrc
 
+      - name: Patch game_shared/neon_mathfun.h (missing 'static' on inline fns)
+        working-directory: gamesrc
+        run: |
+          # game_shared/neon_mathfun.h declares several NEON helper
+          # functions (sincos_ps, asincos_ps, sin_ps, cos_ps, etc.) as plain
+          # `inline` without `static`. Under C99 inline semantics this only
+          # produces a symbol if the compiler actually inlines every call
+          # site - which isn't guaranteed (it depends on optimizer
+          # heuristics and can differ per branch/function). When it
+          # doesn't inline, linking fails with:
+          #   "Undefined symbols ... _sincos_ps, referenced from _AngleMatrix"
+          # Adding `static` gives each translation unit its own internal
+          # copy, which always links correctly regardless of inlining.
+          if [ -f game_shared/neon_mathfun.h ]; then
+            sed -i.bak -E 's/^inline /static inline /' game_shared/neon_mathfun.h
+            rm -f game_shared/neon_mathfun.h.bak
+            echo "Patched. Remaining non-static inline fns (should be none):"
+            grep -n "^inline " game_shared/neon_mathfun.h || echo "(none)"
+          else
+            echo "neon_mathfun.h not found in this branch - skipping patch"
+          fi
+
       - name: Configure (CMake, iOS target - same flags as FWGS official CI)
         working-directory: gamesrc
         run: |
-          # NOTE: Build type must be "Debug" (not Release) on iOS.
-          # hlsdk-portable's cl_dll/CMakeLists.txt & dlls/CMakeLists.txt run a
-          # POST_BUILD `strip` step only when CMAKE_BUILD_TYPE MATCHES "Release".
-          # On iOS cross-compilation that strip invocation resolves incorrectly
-          # (fails with "no files specified"), so we avoid triggering it
-          # entirely by using Debug here - exactly what FWGS's own
-          # scripts/gha/build_ios.sh does for the same reason.
+          # NOTE on build type - must be neither plain "Release" nor "Debug":
+          #
+          # 1. NOT "Release": hlsdk-portable's cl_dll/CMakeLists.txt &
+          #    dlls/CMakeLists.txt run a POST_BUILD `strip` step only when
+          #    CMAKE_BUILD_TYPE MATCHES "Release". On iOS cross-compilation
+          #    that strip invocation resolves incorrectly ("no files
+          #    specified").
+          #
+          # 2. NOT "Debug" (unoptimized/-O0): game_shared/neon_mathfun.h
+          #    declares `sincos_ps` as a plain `inline` function (missing
+          #    `static`). Under C99 inline semantics, an unoptimized build
+          #    won't actually inline the call, and without `static` no
+          #    externally-linkable definition exists - causing
+          #    "Undefined symbols ... _sincos_ps" at link time (seen on
+          #    the master/valve branch, which uses this NEON codepath).
+          #
+          # "RelWithDebInfo" avoids both: it optimizes (so sincos_ps gets
+          # inlined) and its name doesn't match the "Release" regex (so the
+          # buggy strip step is skipped).
           cmake -DCMAKE_SYSTEM_NAME=iOS \
                 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
                 -DCMAKE_INSTALL_PREFIX="$(pwd)/../dist/${{ matrix.gamedir }}" \
-                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                 -B build -S .
 
       - name: Build & install
