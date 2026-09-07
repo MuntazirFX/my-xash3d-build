@@ -94,6 +94,16 @@ jobs:
       - name: Configure (CMake, iOS target - same flags as FWGS official CI)
         working-directory: gamesrc
         run: |
+          # NOTE on install prefix: do NOT append ${{ matrix.gamedir }} here.
+          # hlsdk-portable's cl_dll/CMakeLists.txt & dlls/CMakeLists.txt
+          # already install to "${GAMEDIR}/cl_dlls/..." and
+          # "${GAMEDIR}/dlls/..." RELATIVE TO CMAKE_INSTALL_PREFIX (each
+          # branch sets its own default GAMEDIR - valve/gearbox/bshift - in
+          # mod_options.txt). If we also put the gamedir in the prefix, we
+          # get a double-nested "dist/valve/valve/cl_dlls/..." instead of
+          # "dist/valve/cl_dlls/...", and the engine can't find the library
+          # at the depth it expects ("Xash3D: missing game library").
+          #
           # NOTE on build type - must be neither plain "Release" nor "Debug":
           #
           # 1. NOT "Release": hlsdk-portable's cl_dll/CMakeLists.txt &
@@ -102,20 +112,12 @@ jobs:
           #    that strip invocation resolves incorrectly ("no files
           #    specified").
           #
-          # 2. NOT "Debug" (unoptimized/-O0): game_shared/neon_mathfun.h
-          #    declares `sincos_ps` as a plain `inline` function (missing
-          #    `static`). Under C99 inline semantics, an unoptimized build
-          #    won't actually inline the call, and without `static` no
-          #    externally-linkable definition exists - causing
-          #    "Undefined symbols ... _sincos_ps" at link time (seen on
-          #    the master/valve branch, which uses this NEON codepath).
-          #
-          # "RelWithDebInfo" avoids both: it optimizes (so sincos_ps gets
-          # inlined) and its name doesn't match the "Release" regex (so the
-          # buggy strip step is skipped).
+          # 2. NOT "Debug" (unoptimized/-O0): without the neon_mathfun.h
+          #    patch above this used to fail to inline sincos_ps; kept as
+          #    RelWithDebInfo as a safe middle ground alongside that patch.
           cmake -DCMAKE_SYSTEM_NAME=iOS \
                 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-                -DCMAKE_INSTALL_PREFIX="$(pwd)/../dist/${{ matrix.gamedir }}" \
+                -DCMAKE_INSTALL_PREFIX="$(pwd)/../dist" \
                 -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                 -B build -S .
 
