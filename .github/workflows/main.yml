@@ -8,6 +8,13 @@ on:
 env:
   SDL_VERSION: 2.32.10
 
+# Needed so this workflow's own GITHUB_TOKEN is allowed to push a commit
+# back to the repo and to create a Release - without this, both the
+# "Commit .ipa to repo" and "Publish GitHub Release" steps below fail
+# with a 403 permissions error.
+permissions:
+  contents: write
+
 jobs:
   # ---------------------------------------------------------
   # JOB 1: Build the engine for iOS (arm64)
@@ -72,16 +79,6 @@ jobs:
       - name: Patch game_shared/neon_mathfun.h (missing 'static' on inline fns)
         working-directory: gamesrc
         run: |
-          # game_shared/neon_mathfun.h declares several NEON helper
-          # functions (sincos_ps, asincos_ps, sin_ps, cos_ps, etc.) as plain
-          # `inline` without `static`. Under C99 inline semantics this only
-          # produces a symbol if the compiler actually inlines every call
-          # site - which isn't guaranteed (it depends on optimizer
-          # heuristics and can differ per branch/function). When it
-          # doesn't inline, linking fails with:
-          #   "Undefined symbols ... _sincos_ps, referenced from _AngleMatrix"
-          # Adding `static` gives each translation unit its own internal
-          # copy, which always links correctly regardless of inlining.
           if [ -f game_shared/neon_mathfun.h ]; then
             sed -i.bak -E 's/^inline /static inline /' game_shared/neon_mathfun.h
             rm -f game_shared/neon_mathfun.h.bak
@@ -94,27 +91,6 @@ jobs:
       - name: Configure (CMake, iOS target - same flags as FWGS official CI)
         working-directory: gamesrc
         run: |
-          # NOTE on install prefix: do NOT append ${{ matrix.gamedir }} here.
-          # hlsdk-portable's cl_dll/CMakeLists.txt & dlls/CMakeLists.txt
-          # already install to "${GAMEDIR}/cl_dlls/..." and
-          # "${GAMEDIR}/dlls/..." RELATIVE TO CMAKE_INSTALL_PREFIX (each
-          # branch sets its own default GAMEDIR - valve/gearbox/bshift - in
-          # mod_options.txt). If we also put the gamedir in the prefix, we
-          # get a double-nested "dist/valve/valve/cl_dlls/..." instead of
-          # "dist/valve/cl_dlls/...", and the engine can't find the library
-          # at the depth it expects ("Xash3D: missing game library").
-          #
-          # NOTE on build type - must be neither plain "Release" nor "Debug":
-          #
-          # 1. NOT "Release": hlsdk-portable's cl_dll/CMakeLists.txt &
-          #    dlls/CMakeLists.txt run a POST_BUILD `strip` step only when
-          #    CMAKE_BUILD_TYPE MATCHES "Release". On iOS cross-compilation
-          #    that strip invocation resolves incorrectly ("no files
-          #    specified").
-          #
-          # 2. NOT "Debug" (unoptimized/-O0): without the neon_mathfun.h
-          #    patch above this used to fail to inline sincos_ps; kept as
-          #    RelWithDebInfo as a safe middle ground alongside that patch.
           cmake -DCMAKE_SYSTEM_NAME=iOS \
                 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
                 -DCMAKE_INSTALL_PREFIX="$(pwd)/../dist" \
@@ -132,12 +108,20 @@ jobs:
           path: dist/${{ matrix.gamedir }}
 
   # ---------------------------------------------------------
-  # JOB 3: Assemble app bundle (engine + 3 gamedirs) + sign + zip .ipa
+  # JOB 3: Assemble app bundle, sign, zip .ipa, then publish it
+  #   (a) as a workflow Artifact (as before - temporary, ~90 days)
+  #   (b) committed into the repo under builds/ (permanent, browsable)
+  #   (c) attached to a GitHub Release (permanent, easy public download link)
   # ---------------------------------------------------------
   package-ipa:
     needs: [ build-engine-ios, build-games-ios ]
     runs-on: macos-latest
     steps:
+      - name: Checkout this repo (so we can commit the .ipa into it)
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
       - name: Download engine artifact
         uses: actions/download-artifact@v4
         with:
@@ -159,28 +143,13 @@ jobs:
           set -e
           APP=payload_root/Payload/xash3d.app
           mkdir -p "$APP"
-
-          # Engine binaries (waf destdir layout: engineart/build/ios/*)
-          # NOTE: upload-artifact computes a common root across the 3
-          # uploaded paths (engine/build/ios, engine/build/SDL2.framework,
-          # engine/engine/platform/ios/bundle) - that root is "engine/",
-          # so on download everything sits one level deeper than the
-          # original in-job paths: engineart/build/ios/*,
-          # engineart/build/SDL2.framework, and
-          # engineart/engine/platform/ios/bundle/* (this last one already
-          # keeps its "engine/" prefix since it was engine/engine/...).
           cp -r engineart/build/ios/* "$APP/"
-
-          # App metadata + frameworks
           cp engineart/engine/platform/ios/bundle/Info.plist "$APP/"
           cp -r engineart/build/SDL2.framework "$APP/"
-
-          # Each game keeps its own subfolder -> no client.dylib clash
           for g in valve gearbox bshift; do
             mkdir -p "$APP/$g"
             cp -r "games/$g/"* "$APP/$g/"
           done
-
           echo "Final bundle layout:"
           find "$APP" -maxdepth 2
 
@@ -194,8 +163,30 @@ jobs:
           cd payload_root
           zip -q -r ../xash3d-fwgs-3games-ios-arm64.ipa Payload
 
-      - name: Upload final IPA
+      - name: Upload final IPA (workflow artifact)
         uses: actions/upload-artifact@v4
         with:
           name: xash3d-fwgs-3games-ios-arm64
           path: xash3d-fwgs-3games-ios-arm64.ipa
+
+      - name: Commit .ipa into repo under builds/
+        working-directory: repo
+        run: |
+          mkdir -p builds
+          cp ../xash3d-fwgs-3games-ios-arm64.ipa builds/xash3d-fwgs-3games-ios-arm64.ipa
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add builds/xash3d-fwgs-3games-ios-arm64.ipa
+          if git diff --cached --quiet; then
+            echo "No changes to commit (ipa identical to last run)."
+          else
+            git commit -m "Update built ipa (run #${{ github.run_number }}) [skip ci]"
+            git push
+          fi
+
+      - name: Publish GitHub Release with the .ipa attached
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Build #${{ github.run_number }}"
+          files: xash3d-fwgs-3games-ios-arm64.ipa
