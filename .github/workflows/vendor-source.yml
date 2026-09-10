@@ -21,36 +21,54 @@ jobs:
           rm -rf engine
           git clone --depth 1 https://github.com/FWGS/xash3d-fwgs engine
           rm -rf engine/.git
+          echo "--- Verifying engine/ ---"
+          ls -la engine/
+          echo "--- Verifying engine/platform/ ---"
+          ls -la engine/platform/
 
       - name: Clone hlsdk-portable - valve (master branch)
         run: |
           rm -rf hlsdk-valve
           git clone --depth 1 -b master https://github.com/FWGS/hlsdk-portable hlsdk-valve
           rm -rf hlsdk-valve/.git
+          echo "--- Verifying hlsdk-valve/ ---"
+          ls -la hlsdk-valve/
 
       - name: Clone hlsdk-portable - gearbox (opfor branch)
         run: |
           rm -rf hlsdk-gearbox
           git clone --depth 1 -b opfor https://github.com/FWGS/hlsdk-portable hlsdk-gearbox
           rm -rf hlsdk-gearbox/.git
+          echo "--- Verifying hlsdk-gearbox/ ---"
+          ls -la hlsdk-gearbox/
 
       - name: Clone hlsdk-portable - bshift (bshift branch)
         run: |
           rm -rf hlsdk-bshift
           git clone --depth 1 -b bshift https://github.com/FWGS/hlsdk-portable hlsdk-bshift
           rm -rf hlsdk-bshift/.git
+          echo "--- Verifying hlsdk-bshift/ ---"
+          ls -la hlsdk-bshift/
 
       - name: Strip non-iOS platform folders (this device only builds iOS)
         run: |
+          echo "--- Working directory ---"
+          pwd
+          echo "--- Top-level contents before stripping ---"
+          ls -la
+
           rm -rf engine/android
           rm -rf hlsdk-valve/android hlsdk-gearbox/android hlsdk-bshift/android
 
-          for d in android dos irix linux nswitch psvita sdl1 sdl3 win32; do
-            rm -rf "engine/platform/$d"
-          done
-
-          echo "Remaining engine/platform/ folders (should be iOS-relevant only):"
-          ls engine/platform/
+          if [ -d engine/platform ]; then
+            for d in android dos irix linux nswitch psvita sdl1 sdl3 win32; do
+              rm -rf "engine/platform/$d"
+            done
+            echo "Remaining engine/platform/ folders (should be iOS-relevant only):"
+            ls engine/platform/
+          else
+            echo "::warning::engine/platform/ not found - skipping platform-folder strip. Check the 'Clone engine source' step's verification output above for what went wrong."
+          fi
 
       - name: Write README explaining what's vendored here
         run: |
@@ -88,7 +106,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add engine hlsdk-valve hlsdk-gearbox hlsdk-bshift VENDORED_SOURCE.md
+          for p in engine hlsdk-valve hlsdk-gearbox hlsdk-bshift VENDORED_SOURCE.md; do
+            [ -e "$p" ] && git add "$p"
+          done
           if git diff --cached --quiet; then
             echo "No changes - source already up to date."
           else
