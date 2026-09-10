@@ -22,27 +22,29 @@ jobs:
           git clone --depth 1 https://github.com/FWGS/xash3d-fwgs engine
           rm -rf engine/.git
 
-      - name: Clone hlsdk-portable source (master = valve gamedir)
+      - name: Clone hlsdk-portable - valve (master branch)
         run: |
-          rm -rf hlsdk-portable
-          git clone --depth 1 https://github.com/FWGS/hlsdk-portable hlsdk-portable
-          rm -rf hlsdk-portable/.git
+          rm -rf hlsdk-valve
+          git clone --depth 1 -b master https://github.com/FWGS/hlsdk-portable hlsdk-valve
+          rm -rf hlsdk-valve/.git
+
+      - name: Clone hlsdk-portable - gearbox (opfor branch)
+        run: |
+          rm -rf hlsdk-gearbox
+          git clone --depth 1 -b opfor https://github.com/FWGS/hlsdk-portable hlsdk-gearbox
+          rm -rf hlsdk-gearbox/.git
+
+      - name: Clone hlsdk-portable - bshift (bshift branch)
+        run: |
+          rm -rf hlsdk-bshift
+          git clone --depth 1 -b bshift https://github.com/FWGS/hlsdk-portable hlsdk-bshift
+          rm -rf hlsdk-bshift/.git
 
       - name: Strip non-iOS platform folders (this device only builds iOS)
         run: |
-          # Top-level per-platform project folders (Android Studio
-          # project etc.) - not source code, just other platforms'
-          # build glue.
           rm -rf engine/android
-          rm -rf hlsdk-portable/android
+          rm -rf hlsdk-valve/android hlsdk-gearbox/android hlsdk-bshift/android
 
-          # engine/platform/<name> - one folder per OS the engine
-          # supports. Keep only what iOS actually needs:
-          #   ios/    - the iOS platform layer itself
-          #   apple/  - shared Apple-family code (used by iOS, not just macOS)
-          #   posix/  - shared POSIX code (iOS is POSIX-based)
-          #   sdl2/   - the SDL backend our iOS build links against
-          # Remove every other OS's platform folder.
           for d in android dos irix linux nswitch psvita sdl1 sdl3 win32; do
             rm -rf "engine/platform/$d"
           done
@@ -55,23 +57,18 @@ jobs:
           cat > VENDORED_SOURCE.md << 'EOF'
           # Vendored source code
 
-          This repo mirrors the actual engine and game-SDK source used by
-          the iOS build workflow, so the code is browsable directly on
-          GitHub (not just referenced by a CI script).
+          The build workflow (`.github/workflows/main.yml`) builds from
+          **this repo's own copy** of the engine and game SDK, not by
+          fetching FWGS's repos fresh on every run. This folder set is
+          that copy - both the browsable source *and* the actual build
+          input.
 
           - `engine/` - Xash3D-FWGS engine
             ([FWGS/xash3d-fwgs](https://github.com/FWGS/xash3d-fwgs), `master`)
-          - `hlsdk-portable/` - Half-Life SDK
-            ([FWGS/hlsdk-portable](https://github.com/FWGS/hlsdk-portable), `master`
-            = Half-Life / `valve` gamedir)
-
-          Two more games are built from the **same hlsdk-portable repo on
-          different branches** - `opfor` (Opposing Force / `gearbox`) and
-          `bshift` (Blue Shift). Those aren't vendored here (to avoid
-          tripling this repo's size); the build workflow checks them out
-          directly at build time. Browse them on GitHub:
-          - https://github.com/FWGS/hlsdk-portable/tree/opfor
-          - https://github.com/FWGS/hlsdk-portable/tree/bshift
+          - `hlsdk-valve/` - Half-Life SDK, `master` branch
+            ([FWGS/hlsdk-portable](https://github.com/FWGS/hlsdk-portable)) -> `valve` gamedir
+          - `hlsdk-gearbox/` - same repo, `opfor` branch -> `gearbox` gamedir (Opposing Force)
+          - `hlsdk-bshift/` - same repo, `bshift` branch -> `bshift` gamedir (Blue Shift)
 
           **Not included:** other platforms' code (Android, Windows,
           Linux, PS Vita, Switch, etc. - stripped out since this repo
@@ -82,18 +79,19 @@ jobs:
           source tree).
 
           This snapshot was pulled by the "Vendor Source Code Into Repo"
-          workflow, run manually, not on every push - re-run it any time
-          you want to refresh these folders to upstream's latest.
+          workflow, run manually, not on every push. Re-run it any time
+          you want to refresh these folders to upstream's latest -
+          doing so will change what the *next* build compiles from.
           EOF
 
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add engine hlsdk-portable VENDORED_SOURCE.md
+          git add engine hlsdk-valve hlsdk-gearbox hlsdk-bshift VENDORED_SOURCE.md
           if git diff --cached --quiet; then
             echo "No changes - source already up to date."
           else
-            git commit -m "Vendor engine + hlsdk-portable source [skip ci]"
+            git commit -m "Vendor engine + hlsdk-portable (valve/gearbox/bshift) source [skip ci]"
             git push
           fi
