@@ -109,19 +109,15 @@ jobs:
 
   # ---------------------------------------------------------
   # JOB 3: Assemble app bundle, sign, zip .ipa, then publish it
-  #   (a) as a workflow Artifact (as before - temporary, ~90 days)
-  #   (b) committed into the repo under builds/ (permanent, browsable)
-  #   (c) attached to a GitHub Release (permanent, easy public download link)
+  #   (a) as a workflow Artifact (temporary, ~90 days - useful mid-debug)
+  #   (b) attached to a GitHub Release (permanent, public download link)
+  # Deliberately NOT committed into the repo tree - binaries don't belong
+  # in git history; the repo should only ever contain source/config.
   # ---------------------------------------------------------
   package-ipa:
     needs: [ build-engine-ios, build-games-ios ]
     runs-on: macos-latest
     steps:
-      - name: Checkout this repo (so we can commit the .ipa into it)
-        uses: actions/checkout@v4
-        with:
-          path: repo
-
       - name: Download engine artifact
         uses: actions/download-artifact@v4
         with:
@@ -168,21 +164,6 @@ jobs:
         with:
           name: xash3d-fwgs-3games-ios-arm64
           path: xash3d-fwgs-3games-ios-arm64.ipa
-
-      - name: Commit .ipa into repo under builds/
-        working-directory: repo
-        run: |
-          mkdir -p builds
-          cp ../xash3d-fwgs-3games-ios-arm64.ipa builds/xash3d-fwgs-3games-ios-arm64.ipa
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add builds/xash3d-fwgs-3games-ios-arm64.ipa
-          if git diff --cached --quiet; then
-            echo "No changes to commit (ipa identical to last run)."
-          else
-            git commit -m "Update built ipa (run #${{ github.run_number }}) [skip ci]"
-            git push
-          fi
 
       - name: Publish GitHub Release with the .ipa attached
         uses: softprops/action-gh-release@v2
