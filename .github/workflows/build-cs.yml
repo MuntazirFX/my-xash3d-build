@@ -1,0 +1,125 @@
+name: Build CS Libraries iOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-cs:
+    name: Build CS 1.6 ARM64 Libraries
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install deps
+        run: |
+          brew install cmake ninja p7zip
+
+      - name: Download SDL2 iOS
+        run: |
+          mkdir -p ios/SDL2
+          cd ios/SDL2
+          curl -L -o SDL2.dmg "https://github.com/libsdl-org/SDL/releases/download/release-2.30.3/SDL2-2.30.3.dmg"
+          7z x SDL2.dmg -o./x -y > /dev/null
+          F=$(find ./x -name "SDL2.framework" -type d | head -1)
+          if [ -z "$F" ]; then
+            echo "SDL2.framework NOT FOUND"
+            ls -R ./x | head -50
+            exit 1
+          fi
+          cp -R "$F" ./
+          rm -rf x SDL2.dmg
+          ls -la
+
+      - name: Inspect cs16-client
+        run: |
+          echo "=== hlsdk/cstrike/ ==="
+          ls -la hlsdk/cstrike/ | head -30
+          echo ""
+          echo "=== CMakeLists? ==="
+          ls hlsdk/cstrike/CMakeLists.txt 2>/dev/null || echo "No CMakeLists"
+          echo ""
+          echo "=== existing build scripts? ==="
+          find hlsdk/cstrike -maxdepth 2 -name "*.sh" -o -name "CMakeLists.txt" 2>/dev/null | head -20
+
+      - name: Configure cs16-client
+        working-directory: hlsdk/cstrike
+        run: |
+          mkdir -p build-ios
+          cd build-ios
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDL2_DIR="$(pwd)/../../../../ios/SDL2/SDL2.framework" \
+            2>&1 | tee /tmp/cs16_conf.log || echo "configure failed"
+
+      - name: Build cs16-client
+        working-directory: hlsdk/cstrike/build-ios
+        run: |
+          make -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/cs16_build.log || echo "build failed"
+
+      - name: Configure ReGameDLL
+        working-directory: hlsdk/cstrike-server
+        run: |
+          mkdir -p build-ios
+          cd build-ios
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -DCMAKE_BUILD_TYPE=Release \
+            2>&1 | tee /tmp/regame_conf.log || echo "configure failed"
+
+      - name: Build ReGameDLL
+        working-directory: hlsdk/cstrike-server/build-ios
+        run: |
+          make -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/regame_build.log || echo "build failed"
+
+      - name: Search for built libraries
+        run: |
+          echo "=== All .dylib files ==="
+          find hlsdk -name "*.dylib" 2>/dev/null || echo "(none)"
+          echo ""
+          echo "=== All .so files ==="
+          find hlsdk -name "*.so" 2>/dev/null || echo "(none)"
+          echo ""
+          echo "=== build folders ==="
+          find hlsdk -type d -name "build-ios" 2>/dev/null
+
+      - name: Collect libraries
+        if: always()
+        run: |
+          mkdir -p artifacts/cs
+          find hlsdk -name "*.dylib" -exec cp {} artifacts/cs/ \; 2>/dev/null || true
+          find hlsdk -name "*.so" -exec cp {} artifacts/cs/ \; 2>/dev/null || true
+          echo "=== CS artifacts ==="
+          ls -la artifacts/cs/ || true
+
+      - name: Upload libraries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CS-Libraries
+          path: artifacts/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CS-Logs
+          path: /tmp/*.log
+          retention-days: 7
+          if-no-files-found: ignore
