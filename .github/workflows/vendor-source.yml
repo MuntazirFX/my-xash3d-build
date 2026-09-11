@@ -1,117 +1,120 @@
-name: Vendor Source Code Into Repo
+name: Vendor Source Code
 
-# Manual-trigger only - this is a one-time (or occasional) housekeeping
-# task, not something that should run on every push like the build
-# workflow does.
 on:
   workflow_dispatch:
+    inputs:
+      include_cstrike:
+        description: 'Also vendor cstrike + czero SDKs'
+        type: boolean
+        default: true
 
 permissions:
   contents: write
 
 jobs:
-  vendor-source:
+  vendor:
+    name: Vendor FWGS + HLSDK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
-      - name: Checkout this repo
+      - name: Checkout XashFusion
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Clone engine source (FWGS/xash3d-fwgs, master)
+      - name: Show toolchain
         run: |
-          rm -rf engine
-          git clone --depth 1 https://github.com/FWGS/xash3d-fwgs engine
-          rm -rf engine/.git
-          echo "--- Verifying engine/ ---"
-          ls -la engine/
-          echo "--- Verifying engine/platform/ ---"
-          ls -la engine/platform/
+          git --version
+          echo "Start: $(date -u)"
 
-      - name: Clone hlsdk-portable - valve (master branch)
+      # --------------------------------------------------
+      # 1. Vendor Xash3D-FWGS engine
+      # --------------------------------------------------
+      - name: Clone Xash3D-FWGS
         run: |
-          rm -rf hlsdk-valve
-          git clone --depth 1 -b master https://github.com/FWGS/hlsdk-portable hlsdk-valve
-          rm -rf hlsdk-valve/.git
-          echo "--- Verifying hlsdk-valve/ ---"
-          ls -la hlsdk-valve/
+          git clone --depth=1 https://github.com/FWGS/xash3d-fwgs.git /tmp/fwgs
+          rm -rf /tmp/fwgs/.git /tmp/fwgs/.github
+          mkdir -p engine
+          cp -R /tmp/fwgs/. engine/
+          echo "engine/ ready"
+          ls engine/ | head -30
 
-      - name: Clone hlsdk-portable - gearbox (opfor branch)
+      # --------------------------------------------------
+      # 2. Vendor HLSDK-Portable (all branches)
+      # --------------------------------------------------
+      - name: Clone HLSDK valve
         run: |
-          rm -rf hlsdk-gearbox
-          git clone --depth 1 -b opfor https://github.com/FWGS/hlsdk-portable hlsdk-gearbox
-          rm -rf hlsdk-gearbox/.git
-          echo "--- Verifying hlsdk-gearbox/ ---"
-          ls -la hlsdk-gearbox/
+          git clone --depth=1 --branch valve https://github.com/FWGS/hlsdk-portable.git /tmp/hl-valve
+          rm -rf /tmp/hl-valve/.git /tmp/hl-valve/.github
+          mkdir -p hlsdk/valve
+          cp -R /tmp/hl-valve/. hlsdk/valve/
 
-      - name: Clone hlsdk-portable - bshift (bshift branch)
+      - name: Clone HLSDK gearbox
         run: |
-          rm -rf hlsdk-bshift
-          git clone --depth 1 -b bshift https://github.com/FWGS/hlsdk-portable hlsdk-bshift
-          rm -rf hlsdk-bshift/.git
-          echo "--- Verifying hlsdk-bshift/ ---"
-          ls -la hlsdk-bshift/
+          git clone --depth=1 --branch opfor https://github.com/FWGS/hlsdk-portable.git /tmp/hl-gear
+          rm -rf /tmp/hl-gear/.git /tmp/hl-gear/.github
+          mkdir -p hlsdk/gearbox
+          cp -R /tmp/hl-gear/. hlsdk/gearbox/
 
-      - name: Strip non-iOS platform folders (this device only builds iOS)
+      - name: Clone HLSDK bshift
         run: |
-          echo "--- Working directory ---"
-          pwd
-          echo "--- Top-level contents before stripping ---"
+          git clone --depth=1 --branch bshift https://github.com/FWGS/hlsdk-portable.git /tmp/hl-bshift
+          rm -rf /tmp/hl-bshift/.git /tmp/hl-bshift/.github
+          mkdir -p hlsdk/bshift
+          cp -R /tmp/hl-bshift/. hlsdk/bshift/
+
+      - name: Clone HLSDK cstrike + czero
+        if: ${{ github.event.inputs.include_cstrike == 'true' }}
+        run: |
+          git clone --depth=1 --branch cstrike https://github.com/FWGS/hlsdk-portable.git /tmp/hl-cs
+          rm -rf /tmp/hl-cs/.git /tmp/hl-cs/.github
+          mkdir -p hlsdk/cstrike hlsdk/czero
+          cp -R /tmp/hl-cs/. hlsdk/cstrike/
+          cp -R /tmp/hl-cs/. hlsdk/czero/
+
+      # --------------------------------------------------
+      # 3. Clean up non-iOS platforms
+      # --------------------------------------------------
+      - name: Remove non-iOS platforms
+        run: |
+          # Engine platforms
+          find engine -type d \( -name "android" -o -name "win32" -o -name "linux" -o -name "bsd" -o -name "switch" -o -name "psvita" -o -name "dos" -o -name "emscripten" -o -name "haiku" -o -name "serenityos" \) -exec rm -rf {} + 2>/dev/null || true
+          echo "Cleaned non-iOS platforms"
+
+      # --------------------------------------------------
+      # 4. Create placeholder ios/ folder
+      # --------------------------------------------------
+      - name: Create ios folder
+        run: |
+          mkdir -p ios/XashFusion/App ios/XashFusion/UI ios/XashFusion/Resources ios/SDL2
+          touch ios/XashFusion/.gitkeep
+          touch ios/SDL2/.gitkeep
+
+      # --------------------------------------------------
+      # 5. Show final structure
+      # --------------------------------------------------
+      - name: Show final tree
+        run: |
+          echo "=== Top level ==="
           ls -la
+          echo ""
+          echo "=== engine/ (first 20) ==="
+          ls engine/ | head -20
+          echo ""
+          echo "=== hlsdk/ ==="
+          ls hlsdk/
+          echo ""
+          echo "=== Total files ==="
+          find . -type f -not -path "./.git/*" | wc -l
 
-          rm -rf engine/android
-          rm -rf hlsdk-valve/android hlsdk-gearbox/android hlsdk-bshift/android
-
-          if [ -d engine/platform ]; then
-            for d in android dos irix linux nswitch psvita sdl1 sdl3 win32; do
-              rm -rf "engine/platform/$d"
-            done
-            echo "Remaining engine/platform/ folders (should be iOS-relevant only):"
-            ls engine/platform/
-          else
-            echo "::warning::engine/platform/ not found - skipping platform-folder strip. Check the 'Clone engine source' step's verification output above for what went wrong."
-          fi
-
-      - name: Write README explaining what's vendored here
-        run: |
-          cat > VENDORED_SOURCE.md << 'EOF'
-          # Vendored source code
-
-          The build workflow (`.github/workflows/main.yml`) builds from
-          **this repo's own copy** of the engine and game SDK, not by
-          fetching FWGS's repos fresh on every run. This folder set is
-          that copy - both the browsable source *and* the actual build
-          input.
-
-          - `engine/` - Xash3D-FWGS engine
-            ([FWGS/xash3d-fwgs](https://github.com/FWGS/xash3d-fwgs), `master`)
-          - `hlsdk-valve/` - Half-Life SDK, `master` branch
-            ([FWGS/hlsdk-portable](https://github.com/FWGS/hlsdk-portable)) -> `valve` gamedir
-          - `hlsdk-gearbox/` - same repo, `opfor` branch -> `gearbox` gamedir (Opposing Force)
-          - `hlsdk-bshift/` - same repo, `bshift` branch -> `bshift` gamedir (Blue Shift)
-
-          **Not included:** other platforms' code (Android, Windows,
-          Linux, PS Vita, Switch, etc. - stripped out since this repo
-          only ever builds for iOS), game content
-          (maps/models/textures/sounds - copyrighted, comes from a
-          legally-owned Steam install), and built `.ipa` files
-          (published to this repo's Releases, never committed to the
-          source tree).
-
-          This snapshot was pulled by the "Vendor Source Code Into Repo"
-          workflow, run manually, not on every push. Re-run it any time
-          you want to refresh these folders to upstream's latest -
-          doing so will change what the *next* build compiles from.
-          EOF
-
+      # --------------------------------------------------
+      # 6. Commit + push
+      # --------------------------------------------------
       - name: Commit and push
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          for p in engine hlsdk-valve hlsdk-gearbox hlsdk-bshift VENDORED_SOURCE.md; do
-            [ -e "$p" ] && git add "$p"
-          done
-          if git diff --cached --quiet; then
-            echo "No changes - source already up to date."
-          else
-            git commit -m "Vendor engine + hlsdk-portable (valve/gearbox/bshift) source [skip ci]"
-            git push
-          fi
+          git config user.name  "XashFusion Bot"
+          git config user.email "bot@xashfusion.local"
+          git add -A
+          git commit -m "Vendor Xash3D-FWGS engine + HLSDK (valve, gearbox, bshift, cstrike, czero)" || echo "No changes"
+          git push
