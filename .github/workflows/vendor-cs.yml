@@ -1,0 +1,55 @@
+name: Vendor CS Sources
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  vendor-cs:
+    name: Vendor CS 1.6 + CZ
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone cs16-client
+        run: |
+          git clone --depth=1 https://github.com/Velaron/cs16-client.git /tmp/cs16-client
+          rm -rf /tmp/cs16-client/.git /tmp/cs16-client/.github
+          mkdir -p hlsdk/cstrike
+          cp -R /tmp/cs16-client/. hlsdk/cstrike/
+          echo "cs16-client -> hlsdk/cstrike/"
+
+      - name: Clone ReGameDLL_CS
+        run: |
+          git clone --depth=1 https://github.com/ReGameDLL/ReGameDLL_CS.git /tmp/regamedll
+          rm -rf /tmp/regamedll/.git /tmp/regamedll/.github
+          mkdir -p hlsdk/cstrike-server hlsdk/czero-server
+          cp -R /tmp/regamedll/. hlsdk/cstrike-server/
+          cp -R /tmp/regamedll/. hlsdk/czero-server/
+          echo "ReGameDLL_CS -> hlsdk/cstrike-server/ + hlsdk/czero-server/"
+
+      - name: Show structure
+        run: |
+          echo "=== hlsdk/cstrike/ ==="
+          ls hlsdk/cstrike/ | head -20
+          echo ""
+          echo "=== hlsdk/cstrike-server/ ==="
+          ls hlsdk/cstrike-server/ | head -20
+          echo ""
+          echo "=== hlsdk/czero-server/ ==="
+          ls hlsdk/czero-server/ | head -20
+
+      - name: Commit
+        run: |
+          git config user.name  "XashFusion Bot"
+          git config user.email "bot@xashfusion.local"
+          git add -A
+          git commit -m "Vendor CS sources (cs16-client + ReGameDLL_CS)" || echo "no changes"
+          git push
