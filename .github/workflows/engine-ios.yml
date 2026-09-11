@@ -5,130 +5,93 @@ on:
 
 jobs:
   build-ios:
-    name: Build Xash3D-FWGS iOS ARM64
+    name: Build XashFusion iOS ARM64
     runs-on: macos-latest
-
-    env:
-      SDL_VERSION: 2.32.10
 
     steps:
       - name: Checkout XashFusion
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
-      - name: Prepare official FWGS engine source
+      - name: Checkout official FWGS source with dependencies
         run: |
           set -e
 
           rm -rf "$RUNNER_TEMP/xash3d-fwgs"
 
-          git clone \
-            --recursive \
-            --depth=1 \
+          git clone --recursive --depth=1 \
             https://github.com/FWGS/xash3d-fwgs \
             "$RUNNER_TEMP/xash3d-fwgs"
 
-          echo "FWGS source:"
-          ls -la "$RUNNER_TEMP/xash3d-fwgs"
-
-          echo "Checking libbacktrace:"
           test -d "$RUNNER_TEMP/xash3d-fwgs/3rdparty/libbacktrace/libbacktrace"
 
-      - name: Install Python
+      - name: Install build dependencies
         run: |
-          brew install python
+          brew install python cmake
 
-      - name: Show Xcode
-        run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-          python3 --version
-
-      - name: Build SDL2 iOS framework
+      - name: Build SDL2 iOS
         run: |
           set -e
 
-          git clone \
-            --recursive \
-            --branch "release-${SDL_VERSION}" \
+          git clone --recursive \
             --depth=1 \
-            https://github.com/libsdl-org/SDL \
+            --branch SDL2 \
+            https://github.com/libsdl-org/SDL.git \
             "$RUNNER_TEMP/SDL"
 
           cd "$RUNNER_TEMP/SDL/Xcode/SDL"
 
           xcodebuild \
-            -scheme xcFramework-iOS \
-            -target xcFramework-iOS \
-            build \
-            -configuration Release
+            -scheme SDL2 \
+            -configuration Release \
+            -sdk iphoneos \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            build
 
-          test -f \
-            Products/SDL2.xcframework/ios-arm64/SDL2.framework/SDL2
+          SDL_FRAMEWORK="$(find . -type d -name SDL2.framework | head -1)"
 
-          sudo mkdir -p /Library/Frameworks
+          test -n "$SDL_FRAMEWORK"
 
-          sudo cp -R \
-            Products/SDL2.xcframework/ios-arm64/SDL2.framework \
-            /Library/Frameworks/
+          rm -rf "$RUNNER_TEMP/SDL2.framework"
+          cp -R "$SDL_FRAMEWORK" "$RUNNER_TEMP/SDL2.framework"
 
-      - name: Verify SDL2
-        run: |
-          set -e
+          test -f "$RUNNER_TEMP/SDL2.framework/SDL2"
 
-          test -f /Library/Frameworks/SDL2.framework/SDL2
-
-          file /Library/Frameworks/SDL2.framework/SDL2
-
-      - name: Build Xash3D-FWGS engine
+      - name: Build Xash3D-FWGS
         working-directory: ${{ runner.temp }}/xash3d-fwgs
         run: |
           set -e
 
+          cp -R \
+            "$RUNNER_TEMP/SDL2.framework" \
+            ./SDL2.framework
+
           ./waf configure \
+            --ios \
+            --enable-bundled-deps \
             --enable-lto \
-            --ios
+            --sdl2="$(realpath SDL2.framework)"
 
           ./waf build
+
+          rm -rf build/ios
 
           ./waf install \
             --destdir=build/ios
 
-      - name: Verify engine build
+      - name: Build Half-Life ARM64 libraries
         working-directory: ${{ runner.temp }}/xash3d-fwgs
         run: |
           set -e
 
-          echo "===== BUILD DIRECTORY ====="
-          find build/ios -type f -print
+          rm -rf hlsdk
 
-          echo ""
-          echo "===== ENGINE BUILD ====="
-          find build -type f -print | head -200
-
-      - name: Prepare SDL2 for IPA
-        working-directory: ${{ runner.temp }}/xash3d-fwgs
-        run: |
-          set -e
-
-          rm -rf build/SDL2.framework
-
-          cp -R \
-            /Library/Frameworks/SDL2.framework \
-            build/SDL2.framework
-
-          test -f build/SDL2.framework/SDL2
-
-      - name: Build Half-Life SDK libraries
-        working-directory: ${{ runner.temp }}/xash3d-fwgs
-        run: |
-          set -e
-
-          git clone \
-            --recursive \
-            --branch mobile_hacks \
+          git clone --recursive \
             --depth=1 \
+            --branch mobile_hacks \
             https://github.com/FWGS/hlsdk-portable \
             hlsdk
 
@@ -137,22 +100,46 @@ jobs:
           cmake \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-            -DCMAKE_INSTALL_PREFIX="$(realpath build/ios/libs)" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_INSTALL_PREFIX="$(realpath build/ios/libs)" \
             -B hlsdk/build \
             -S hlsdk
 
           cmake \
             --build hlsdk/build \
-            --target install
+            --target install \
+            --parallel
 
-      - name: Inspect game libraries
+      - name: Verify generated libraries
         working-directory: ${{ runner.temp }}/xash3d-fwgs
         run: |
-          echo "===== iOS LIBRARIES ====="
-          find build/ios/libs -type f -print || true
+          set -e
 
-      - name: Create IPA
+          echo "===== GENERATED IOS LIBRARIES ====="
+          find build/ios/libs -type f -print
+
+          echo ""
+          echo "===== MACH-O ====="
+
+          find build/ios/libs -type f -name "*.dylib" -print0 |
+          while IFS= read -r -d '' f; do
+            echo "--- $f"
+            file "$f"
+          done
+
+      - name: Prepare SDL2 framework
+        working-directory: ${{ runner.temp }}/xash3d-fwgs
+        run: |
+          set -e
+
+          cp -R \
+            "$RUNNER_TEMP/SDL2.framework" \
+            build/SDL2.framework
+
+          test -f build/SDL2.framework/SDL2
+
+      - name: Create iOS IPA
         working-directory: ${{ runner.temp }}/xash3d-fwgs
         run: |
           set -e
