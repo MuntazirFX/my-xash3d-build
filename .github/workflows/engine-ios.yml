@@ -1,12 +1,15 @@
-name: XashFusion - iOS Engine ARM64
+name: XashFusion - iOS ARM64
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-engine:
+  build-ios:
     name: Build Xash3D-FWGS iOS ARM64
     runs-on: macos-latest
+
+    env:
+      SDL_VERSION: 2.32.10
 
     steps:
       - name: Checkout XashFusion
@@ -14,71 +17,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prepare FWGS submodules
-        working-directory: engine
-        shell: bash
+      - name: Prepare official FWGS engine source
         run: |
           set -e
 
-          echo "Reading FWGS .gitmodules..."
+          rm -rf "$RUNNER_TEMP/xash3d-fwgs"
 
-          git config -f .gitmodules --get-regexp '^submodule\..*\.path$' \
-            | while read -r key path; do
-                name="${key#submodule.}"
-                name="${name%.path}"
+          git clone \
+            --recursive \
+            --depth=1 \
+            https://github.com/FWGS/xash3d-fwgs \
+            "$RUNNER_TEMP/xash3d-fwgs"
 
-                url="$(git config -f .gitmodules \
-                  --get "submodule.${name}.url")"
+          echo "FWGS source:"
+          ls -la "$RUNNER_TEMP/xash3d-fwgs"
 
-                echo ""
-                echo "========================================"
-                echo "Submodule: $name"
-                echo "Path:     $path"
-                echo "URL:      $url"
-                echo "========================================"
+          echo "Checking libbacktrace:"
+          test -d "$RUNNER_TEMP/xash3d-fwgs/3rdparty/libbacktrace/libbacktrace"
 
-                rm -rf "$path"
-                mkdir -p "$(dirname "$path")"
-
-                git clone --recursive "$url" "$path"
-              done
-
-      - name: Verify FWGS dependencies
-        working-directory: engine
-        shell: bash
+      - name: Install Python
         run: |
-          set -e
+          brew install python
 
-          echo "Checking required submodules..."
-
-          test -d 3rdparty/libbacktrace
-          test -d 3rdparty/libbacktrace/libbacktrace
-
-          echo "libbacktrace: OK"
-
-          find 3rdparty/libbacktrace -maxdepth 2 -type f | head -30
-
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Show build environment
+      - name: Show Xcode
         run: |
           xcodebuild -version
-          clang --version
-          python3 --version
           xcrun --sdk iphoneos --show-sdk-version
+          python3 --version
 
-      - name: Build SDL2 for iOS ARM64
-        shell: bash
+      - name: Build SDL2 iOS framework
         run: |
           set -e
 
           git clone \
-            --depth 1 \
-            --branch release-2.32.10 \
-            https://github.com/libsdl-org/SDL.git \
+            --recursive \
+            --branch "release-${SDL_VERSION}" \
+            --depth=1 \
+            https://github.com/libsdl-org/SDL \
             "$RUNNER_TEMP/SDL"
 
           cd "$RUNNER_TEMP/SDL/Xcode/SDL"
@@ -86,114 +61,120 @@ jobs:
           xcodebuild \
             -scheme xcFramework-iOS \
             -target xcFramework-iOS \
-            -configuration Release \
-            build
+            build \
+            -configuration Release
 
           test -f \
             Products/SDL2.xcframework/ios-arm64/SDL2.framework/SDL2
 
-          mkdir -p "$RUNNER_TEMP/SDL-install"
+          sudo mkdir -p /Library/Frameworks
 
-          cp -R \
+          sudo cp -R \
             Products/SDL2.xcframework/ios-arm64/SDL2.framework \
-            "$RUNNER_TEMP/SDL-install/SDL2.framework"
+            /Library/Frameworks/
 
-      - name: Verify SDL2 ARM64
-        shell: bash
+      - name: Verify SDL2
         run: |
           set -e
 
-          file \
-            "$RUNNER_TEMP/SDL-install/SDL2.framework/SDL2"
+          test -f /Library/Frameworks/SDL2.framework/SDL2
 
-      - name: Configure Xash3D-FWGS
-        working-directory: engine
-        shell: bash
+          file /Library/Frameworks/SDL2.framework/SDL2
+
+      - name: Build Xash3D-FWGS engine
+        working-directory: ${{ runner.temp }}/xash3d-fwgs
         run: |
           set -e
 
-          python3 ./waf configure \
-            --ios \
+          ./waf configure \
             --enable-lto \
-            --enable-bundled-deps \
-            --sdl2="$RUNNER_TEMP/SDL-install/SDL2.framework"
+            --ios
 
-      - name: Build Xash3D-FWGS
-        working-directory: engine
-        shell: bash
-        run: |
-          set -e
-          python3 ./waf build -v
+          ./waf build
 
-      - name: Install Xash3D-FWGS
-        working-directory: engine
-        shell: bash
+          ./waf install \
+            --destdir=build/ios
+
+      - name: Verify engine build
+        working-directory: ${{ runner.temp }}/xash3d-fwgs
         run: |
           set -e
 
-          rm -rf ../build/ios
-
-          python3 ./waf install \
-            --destdir="../build/ios"
-
-      - name: Inspect engine output
-        shell: bash
-        run: |
-          set -e
-
-          echo "===== build/ios ====="
+          echo "===== BUILD DIRECTORY ====="
           find build/ios -type f -print
 
           echo ""
-          echo "===== engine/build ====="
-          find engine/build -type f -print | head -200
+          echo "===== ENGINE BUILD ====="
+          find build -type f -print | head -200
 
-      - name: Verify ARM64 Mach-O
-        shell: bash
+      - name: Prepare SDL2 for IPA
+        working-directory: ${{ runner.temp }}/xash3d-fwgs
         run: |
           set -e
 
-          found=0
+          rm -rf build/SDL2.framework
 
-          while IFS= read -r file_path; do
-            if file "$file_path" | grep -Eq \
-              'Mach-O.*arm64|Mach-O 64-bit.*arm64'; then
+          cp -R \
+            /Library/Frameworks/SDL2.framework \
+            build/SDL2.framework
 
-              echo "ARM64 MACH-O FOUND:"
-              echo "$file_path"
+          test -f build/SDL2.framework/SDL2
 
-              found=1
-            fi
-          done < <(
-            find build/ios engine/build \
-              -type f \
-              2>/dev/null
-          )
-
-          if [ "$found" -ne 1 ]; then
-            echo "ERROR: No ARM64 Mach-O binary produced."
-            exit 1
-          fi
-
-      - name: Package engine artifact
-        shell: bash
+      - name: Build Half-Life SDK libraries
+        working-directory: ${{ runner.temp }}/xash3d-fwgs
         run: |
           set -e
 
-          rm -rf artifact
-          mkdir -p artifact/xash3d-ios-arm64
+          git clone \
+            --recursive \
+            --branch mobile_hacks \
+            --depth=1 \
+            https://github.com/FWGS/hlsdk-portable \
+            hlsdk
 
-          cp -R \
-            build/ios/. \
-            artifact/xash3d-ios-arm64/
+          mkdir -p build/ios/libs
 
-          cp -R \
-            "$RUNNER_TEMP/SDL-install/SDL2.framework" \
-            artifact/xash3d-ios-arm64/SDL2.framework
+          cmake \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DCMAKE_INSTALL_PREFIX="$(realpath build/ios/libs)" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -B hlsdk/build \
+            -S hlsdk
 
-      - name: Upload engine artifact
+          cmake \
+            --build hlsdk/build \
+            --target install
+
+      - name: Inspect game libraries
+        working-directory: ${{ runner.temp }}/xash3d-fwgs
+        run: |
+          echo "===== iOS LIBRARIES ====="
+          find build/ios/libs -type f -print || true
+
+      - name: Create IPA
+        working-directory: ${{ runner.temp }}/xash3d-fwgs
+        run: |
+          set -e
+
+          ./scripts/ios/createipa.sh
+
+          test -f build/xash3d.ipa
+
+      - name: Rename IPA
+        working-directory: ${{ runner.temp }}/xash3d-fwgs
+        run: |
+          set -e
+
+          mkdir -p artifacts
+
+          mv \
+            build/xash3d.ipa \
+            artifacts/XashFusion-iOS-ARM64.ipa
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: XashFusion-iOS-engine-arm64
-          path: artifact/xash3d-ios-arm64
+          name: XashFusion-iOS-ARM64
+          path: ${{ runner.temp }}/xash3d-fwgs/artifacts/XashFusion-iOS-ARM64.ipa
           if-no-files-found: error
