@@ -1,4 +1,4 @@
-name: XashFusion - iOS ARM64
+name: Build XashFusion iOS ARM64
 
 on:
   workflow_dispatch:
@@ -9,7 +9,8 @@ jobs:
     runs-on: macos-latest
 
     env:
-      SDL_VERSION: 2.32.10
+      SDL_VERSION: "2.32.10"
+      IOS_DEPLOYMENT_TARGET: "15.0"
 
     steps:
       - name: Checkout XashFusion
@@ -18,39 +19,78 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Verify XashFusion source
+      - name: Verify repository
         run: |
-          set -e
+          set -euxo pipefail
 
-          test -f engine/waf
-          test -f engine/wscript
-
-          echo "XashFusion engine source OK"
+          echo "===== Repository ====="
+          pwd
+          ls -la
 
           echo "===== Engine ====="
-          find engine -maxdepth 2 -type d | sort
+          test -f engine/waf
+          test -f engine/wscript
+          ls -la engine
 
           echo "===== HLSDK ====="
-          find hlsdk -maxdepth 2 -type d | sort
+          ls -la hlsdk || true
 
-      - name: Initialize engine dependencies
+      - name: Initialize all submodules
         working-directory: engine
         run: |
-          set -e
+          set -euxo pipefail
 
-          git submodule sync --recursive || true
-          git submodule update --init --recursive || true
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+          echo "===== Submodule status ====="
+          git submodule status --recursive
 
           echo "===== libbacktrace ====="
-          find 3rdparty/libbacktrace -maxdepth 3 -type f 2>/dev/null | head -50 || true
+          if [ -d "3rdparty/libbacktrace" ]; then
+            ls -la 3rdparty/libbacktrace
+          else
+            echo "ERROR: 3rdparty/libbacktrace directory is missing"
+            exit 1
+          fi
 
-      - name: Install build dependencies
+      - name: Verify libbacktrace
+        working-directory: engine
         run: |
-          brew install python
+          set -euxo pipefail
 
-      - name: Build SDL2 iOS
+          if [ ! -f "3rdparty/libbacktrace/Makefile" ] && \
+             [ ! -f "3rdparty/libbacktrace/configure" ] && \
+             [ ! -d "3rdparty/libbacktrace/.git" ]; then
+            echo "libbacktrace contents:"
+            find 3rdparty/libbacktrace -maxdepth 2 -print | head -100
+          fi
+
+          test -d 3rdparty/libbacktrace
+
+      - name: Select Xcode
         run: |
-          set -e
+          set -euxo pipefail
+
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+
+          brew update
+          brew install python cmake pkg-config
+
+          python3 --version
+          cmake --version
+          pkg-config --version
+
+      - name: Build SDL2 for iOS
+        run: |
+          set -euxo pipefail
 
           rm -rf "$RUNNER_TEMP/SDL"
 
@@ -60,169 +100,203 @@ jobs:
             https://github.com/libsdl-org/SDL.git \
             "$RUNNER_TEMP/SDL"
 
-          cd "$RUNNER_TEMP/SDL/Xcode/SDL"
+          cd "$RUNNER_TEMP/SDL"
+
+          echo "===== SDL commit ====="
+          git rev-parse HEAD
+
+          echo "===== SDL Xcode schemes ====="
+          xcodebuild \
+            -project Xcode/SDL/SDL.xcodeproj \
+            -list
+
+          cd Xcode/SDL
 
           xcodebuild \
+            -project SDL.xcodeproj \
             -scheme xcFramework-iOS \
-            -target xcFramework-iOS \
-            build \
-            -configuration Release
+            -configuration Release \
+            -sdk iphoneos \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            IPHONEOS_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET}" \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            build
+
+      - name: Locate SDL2 framework
+        run: |
+          set -euxo pipefail
+
+          echo "===== Searching SDL2 ====="
+
+          find "$RUNNER_TEMP/SDL" \
+            -type d \
+            -name "*.framework" \
+            -print
+
+          find "$RUNNER_TEMP/SDL" \
+            -type f \
+            -name "SDL2" \
+            -print
+
+      - name: Prepare SDL2 framework
+        run: |
+          set -euxo pipefail
+
+          mkdir -p "$GITHUB_WORKSPACE/build/SDL2"
+
+          SDL_FRAMEWORK="$(find "$RUNNER_TEMP/SDL" \
+            -type d \
+            -path "*/Products/*/SDL2.framework" \
+            | head -1)"
+
+          if [ -z "$SDL_FRAMEWORK" ]; then
+            echo "ERROR: SDL2.framework was not found"
+            find "$RUNNER_TEMP/SDL" -maxdepth 8 -type d -name "*.framework" -print
+            exit 1
+          fi
+
+          echo "SDL framework:"
+          echo "$SDL_FRAMEWORK"
+
+          cp -R \
+            "$SDL_FRAMEWORK" \
+            "$GITHUB_WORKSPACE/build/SDL2/SDL2.framework"
 
           test -f \
-            Products/SDL2.xcframework/ios-arm64/SDL2.framework/SDL2
+            "$GITHUB_WORKSPACE/build/SDL2/SDL2.framework/SDL2"
 
-          sudo mkdir -p /Library/Frameworks
-
-          sudo cp -R \
-            Products/SDL2.xcframework/ios-arm64/SDL2.framework \
-            /Library/Frameworks/SDL2.framework
-
-      - name: Verify SDL2
-        run: |
-          set -e
-
-          test -f /Library/Frameworks/SDL2.framework/SDL2
-
-          file /Library/Frameworks/SDL2.framework/SDL2
+          file \
+            "$GITHUB_WORKSPACE/build/SDL2/SDL2.framework/SDL2"
 
       - name: Configure Xash3D-FWGS
         working-directory: engine
         run: |
-          set -e
+          set -euxo pipefail
+
+          echo "===== Waf ====="
+          ./waf --version
+
+          echo "===== Configure iOS ARM64 ====="
 
           ./waf configure \
-            --enable-lto \
             --ios \
+            --arch=arm64 \
             --enable-bundled-deps \
-            --sdl2=/Library/Frameworks/SDL2.framework
+            --enable-lto \
+            --sdl2="$GITHUB_WORKSPACE/build/SDL2/SDL2.framework"
 
       - name: Build Xash3D-FWGS
         working-directory: engine
         run: |
-          set -e
+          set -euxo pipefail
 
-          ./waf build -v
+          ./waf build -v -j2
 
       - name: Install Xash3D-FWGS
         working-directory: engine
         run: |
-          set -e
+          set -euxo pipefail
 
-          rm -rf ../build/ios
+          rm -rf "$GITHUB_WORKSPACE/build/xash-install"
 
           ./waf install \
-            --destdir=../build/ios
+            --destdir="$GITHUB_WORKSPACE/build/xash-install"
 
-      - name: Inspect engine output
+      - name: Find engine binaries
         run: |
-          set -e
+          set -euxo pipefail
 
-          echo "===== XASHFUSION BUILD OUTPUT ====="
+          echo "===== Installed files ====="
 
-          find build/ios -type f -print || true
+          find build/xash-install \
+            -type f \
+            -print \
+            | sort
 
-          echo ""
-          echo "===== ENGINE BUILD FILES ====="
+          echo "===== Mach-O files ====="
 
-          find engine/build -type f -print | head -200 || true
+          find build/xash-install \
+            -type f \
+            -exec file {} \; \
+            | grep -E "Mach-O" || true
 
       - name: Verify ARM64 engine
         run: |
-          set -e
+          set -euxo pipefail
 
-          echo "===== MACH-O BINARIES ====="
+          ENGINE_FOUND=0
 
-          found=0
+          while IFS= read -r -d '' FILE; do
+            INFO="$(file "$FILE")"
 
-          while IFS= read -r file_path; do
-            info="$(file "$file_path")"
+            echo "$INFO"
 
-            echo "$info"
-
-            if echo "$info" | grep -Eq 'Mach-O.*arm64|Mach-O 64-bit.*arm64'; then
-              found=1
+            if echo "$INFO" | grep -Eq \
+              "Mach-O.*arm64|Mach-O 64-bit.*arm64"; then
+              ENGINE_FOUND=1
             fi
 
           done < <(
-            find build/ios engine/build -type f 2>/dev/null
+            find build/xash-install \
+              -type f \
+              -print0
           )
 
-          if [ "$found" -eq 0 ]; then
-            echo "ERROR: No ARM64 Mach-O engine binary found."
+          if [ "$ENGINE_FOUND" -eq 0 ]; then
+            echo "ERROR: No ARM64 Mach-O binary was produced."
             exit 1
           fi
 
-      - name: Prepare SDL2 framework
+      - name: Check HLSDK source
         run: |
-          set -e
+          set -euxo pipefail
 
-          rm -rf build/SDL2.framework
+          echo "===== HLSDK directories ====="
 
-          cp -R \
-            /Library/Frameworks/SDL2.framework \
-            build/SDL2.framework
-
-          test -f build/SDL2.framework/SDL2
-
-      - name: Build HLSDK libraries
-        working-directory: hlsdk
-        run: |
-          set -e
-
-          mkdir -p ../build/ios/libs
-
-          cmake \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_INSTALL_PREFIX="$(realpath ../build/ios/libs)" \
-            -B build \
-            -S .
-
-          cmake \
-            --build build \
-            --target install \
-            --parallel
-
-      - name: Inspect game libraries
-        run: |
-          echo "===== GAME LIBRARIES ====="
-
-          find build/ios/libs -type f -print || true
-
-          echo ""
-          echo "===== DYLIB ARCHITECTURES ====="
-
-          find build/ios/libs -type f -name "*.dylib" -print0 |
-          while IFS= read -r -d '' f; do
-            echo "--- $f"
-            file "$f"
+          for DIR in \
+            valve \
+            bshift \
+            gearbox \
+            cstrike \
+            cstrike-server \
+            czero \
+            czero-server
+          do
+            if [ -d "hlsdk/$DIR" ]; then
+              echo "FOUND: hlsdk/$DIR"
+            else
+              echo "MISSING: hlsdk/$DIR"
+            fi
           done
 
-      - name: Create IPA
-        working-directory: engine
+      - name: Prepare engine artifact
         run: |
-          set -e
+          set -euxo pipefail
 
-          ./scripts/ios/createipa.sh
+          mkdir -p artifacts/xash3d
 
-          test -f build/xash3d.ipa
+          cp -R \
+            build/xash-install/. \
+            artifacts/xash3d/
 
-      - name: Rename IPA
-        working-directory: engine
+          cp -R \
+            build/SDL2/SDL2.framework \
+            artifacts/xash3d/
+
+      - name: Create engine archive
         run: |
-          set -e
+          set -euxo pipefail
 
-          mkdir -p artifacts
+          cd artifacts
 
-          mv \
-            build/xash3d.ipa \
-            artifacts/XashFusion-iOS-ARM64.ipa
+          tar -czf \
+            XashFusion-iOS-ARM64-engine.tar.gz \
+            xash3d
 
-      - name: Upload IPA
+      - name: Upload engine artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XashFusion-iOS-ARM64
-          path: engine/artifacts/XashFusion-iOS-ARM64.ipa
+          name: XashFusion-iOS-ARM64-engine
+          path: artifacts/XashFusion-iOS-ARM64-engine.tar.gz
           if-no-files-found: error
