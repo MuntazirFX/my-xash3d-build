@@ -1,4 +1,4 @@
-name: XashFusion - iOS Engine
+name: XashFusion - iOS Engine ARM64
 
 on:
   workflow_dispatch:
@@ -12,23 +12,40 @@ jobs:
       - name: Checkout XashFusion
         uses: actions/checkout@v4
         with:
-         submodules: recursive
-         fetch-depth: 0
+          fetch-depth: 0
+
+      - name: Initialize engine submodules
+        working-directory: engine
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Verify engine source
+        working-directory: engine
+        run: |
+          test -f waf
+          test -f wscript
+          test -d 3rdparty/libbacktrace
+          echo "FWGS engine source OK"
+          echo "libbacktrace OK"
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
 
-      - name: Show toolchain
+      - name: Show build environment
         run: |
           xcodebuild -version
           clang --version
           python3 --version
+          xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Build SDL2 for iOS
+      - name: Build SDL2 for iOS ARM64
         run: |
-          git clone --depth 1 --branch release-2.32.10 \
+          git clone \
+            --depth 1 \
+            --branch release-2.32.10 \
             https://github.com/libsdl-org/SDL.git \
             "$RUNNER_TEMP/SDL"
 
@@ -37,8 +54,11 @@ jobs:
           xcodebuild \
             -scheme xcFramework-iOS \
             -target xcFramework-iOS \
-            build \
-            -configuration Release
+            -configuration Release \
+            build
+
+          test -f \
+            Products/SDL2.xcframework/ios-arm64/SDL2.framework/SDL2
 
           mkdir -p "$RUNNER_TEMP/SDL-install"
 
@@ -46,10 +66,13 @@ jobs:
             Products/SDL2.xcframework/ios-arm64/SDL2.framework \
             "$RUNNER_TEMP/SDL-install/SDL2.framework"
 
-      - name: Verify SDL2
+      - name: Verify SDL2 ARM64
         run: |
-          test -d "$RUNNER_TEMP/SDL-install/SDL2.framework"
-          file "$RUNNER_TEMP/SDL-install/SDL2.framework/SDL2"
+          test -f \
+            "$RUNNER_TEMP/SDL-install/SDL2.framework/SDL2"
+
+          file \
+            "$RUNNER_TEMP/SDL-install/SDL2.framework/SDL2"
 
       - name: Configure Xash3D-FWGS
         working-directory: engine
@@ -67,42 +90,72 @@ jobs:
         working-directory: engine
         run: |
           rm -rf ../build/ios
+
           python3 ./waf install \
             --destdir="../build/ios"
 
-      - name: Find engine output
+      - name: Inspect engine output
         run: |
           echo "===== build/ios ====="
-          find build/ios -maxdepth 5 -type f -print || true
+          find build/ios -type f -print
 
+          echo ""
+          echo "===== executable files ====="
+          find build/ios -type f -perm -111 -print || true
+
+          echo ""
           echo "===== engine build ====="
-          find engine/build -type f -perm -111 -print 2>/dev/null || true
+          find engine/build -type f -print | head -200
 
-      - name: Verify ARM64 engine binary
+      - name: Verify actual ARM64 engine binary
         run: |
+          set -e
+
           found=0
 
-          while IFS= read -r file; do
-            if file "$file" | grep -q "arm64"; then
-              echo "ARM64 binary found: $file"
+          while IFS= read -r binary; do
+            echo "Checking: $binary"
+
+            if file "$binary" | grep -Eq \
+              'Mach-O.*arm64|Mach-O 64-bit.*arm64'; then
+
+              echo "FOUND ARM64 MACH-O: $binary"
               found=1
             fi
-          done < <(find build/ios engine/build -type f 2>/dev/null)
+          done < <(
+            find build/ios engine/build \
+              -type f \
+              2>/dev/null
+          )
 
           if [ "$found" -ne 1 ]; then
-            echo "ERROR: No ARM64 engine binary was produced."
+            echo ""
+            echo "ERROR: Actual iOS ARM64 engine binary was not produced."
+            echo "Build will stop here."
             exit 1
           fi
 
-      - name: Package engine artifact
+      - name: Prepare engine artifact
         run: |
-          mkdir -p artifact
-          cp -R build/ios artifact/engine-ios-arm64
-          cp -R "$RUNNER_TEMP/SDL-install/SDL2.framework" \
-            artifact/engine-ios-arm64/SDL2.framework
+          set -e
 
-      - name: Upload engine artifact
+          rm -rf artifact
+          mkdir -p artifact
+
+          cp -R build/ios artifact/xash3d-ios-arm64
+
+          cp -R \
+            "$RUNNER_TEMP/SDL-install/SDL2.framework" \
+            artifact/xash3d-ios-arm64/SDL2.framework
+
+      - name: Show final artifact
+        run: |
+          echo "===== FINAL ARTIFACT ====="
+          find artifact -type f -print
+
+      - name: Upload iOS ARM64 engine
         uses: actions/upload-artifact@v4
         with:
           name: XashFusion-iOS-engine-arm64
-          path: artifact/engine-ios-arm64
+          path: artifact/xash3d-ios-arm64
+          if-no-files-found: error
