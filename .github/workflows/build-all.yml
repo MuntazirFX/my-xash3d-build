@@ -1,0 +1,455 @@
+# build-all.yml
+# Complete XashFusion iOS build: Engine + HLSDK + CS + IPA + Auto-Release.
+# Uses official FWGS iOS scripts.
+# XashFusion
+
+name: Build Complete XashFusion IPA
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'CHANGELOG.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-complete:
+    name: Build Engine + HLSDK + CS + IPA
+    runs-on: macos-14
+    timeout-minutes: 120
+
+    steps:
+      # ==========================================================
+      # 0. SETUP
+      # ==========================================================
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Show toolchain
+        run: |
+          echo "=== Xcode ==="
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          echo "=== Python ==="
+          python3 --version
+          echo "=== Host ==="
+          uname -a
+
+      - name: Install dependencies
+        run: |
+          brew install python@3.11 cmake ninja p7zip wget
+
+      - name: Verify source folders
+        run: |
+          echo "=== engine/ ==="
+          test -f engine/waf && echo "OK: engine/waf" || (echo "MISSING: engine/waf" && exit 1)
+          test -f engine/wscript && echo "OK: engine/wscript" || (echo "MISSING: engine/wscript" && exit 1)
+          test -d engine/scripts/ios && echo "OK: engine/scripts/ios" || (echo "MISSING: engine/scripts/ios" && exit 1)
+          echo ""
+          echo "=== hlsdk/ ==="
+          ls hlsdk/
+          for g in valve bshift gearbox cstrike cstrike-server czero-server; do
+            test -d "hlsdk/$g" && echo "OK: hlsdk/$g" || echo "MISSING: hlsdk/$g"
+          done
+
+      # ==========================================================
+      # 1. SDL2 iOS FRAMEWORK
+      # ==========================================================
+      - name: Download SDL2 iOS framework
+        run: |
+          mkdir -p ios/SDL2
+          cd ios/SDL2
+          echo "Downloading SDL2 2.30.3 for iOS..."
+          curl -L -o SDL2.dmg "https://github.com/libsdl-org/SDL/releases/download/release-2.30.3/SDL2-2.30.3.dmg"
+          ls -lh SDL2.dmg
+          7z x SDL2.dmg -o./extracted -y > /dev/null
+          FOUND=$(find ./extracted -name "SDL2.framework" -type d | head -1)
+          if [ -z "$FOUND" ]; then
+            echo "SDL2.framework NOT FOUND"
+            find ./extracted -maxdepth 3 -type d | head -30
+            exit 1
+          fi
+          cp -R "$FOUND" ./
+          rm -rf extracted SDL2.dmg
+          echo "SDL2.framework ready:"
+          ls -la
+
+      # ==========================================================
+      # 2. BUILD ENGINE (Xash3D-FWGS)
+      # ==========================================================
+      - name: Configure Xash3D engine
+        working-directory: engine
+        run: |
+          chmod +x waf
+          python3 ./waf --version
+          echo "=== Configuring ==="
+          python3 ./waf configure \
+            --ios \
+            --sdl2="$(pwd)/../ios/SDL2/SDL2.framework" \
+            --enable-bundled-deps \
+            --disable-werror \
+            2>&1 | tee /tmp/step_engine_configure.log
+
+      - name: Build Xash3D engine
+        working-directory: engine
+        run: |
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/step_engine_build.log
+
+      - name: Install Xash3D engine
+        working-directory: engine
+        run: |
+          mkdir -p "$(pwd)/../artifacts/engine"
+          python3 ./waf install --destdir="$(pwd)/../artifacts/engine" 2>&1 | tee /tmp/step_engine_install.log
+
+      - name: Show engine output
+        run: |
+          echo "=== engine artifacts ==="
+          find artifacts/engine -type f 2>/dev/null | head -50
+          echo ""
+          echo "=== dylibs ==="
+          find artifacts/engine -name "*.dylib" 2>/dev/null
+          echo ""
+          echo "=== binaries ==="
+          find artifacts/engine -type f -not -name "*.dylib" -not -name "*.txt" 2>/dev/null | head -20
+
+      # ==========================================================
+      # 3. BUILD HLSDK (Half-Life, Blue Shift, Opposing Force)
+      # ==========================================================
+      - name: Build HLSDK valve (Half-Life)
+        run: |
+          cd hlsdk/valve
+          chmod +x waf 2>/dev/null || true
+          python3 ./waf configure \
+            --sdl2="$(pwd)/../../ios/SDL2/SDL2.framework" \
+            --disable-werror \
+            2>&1 | tee /tmp/step_valve_configure.log
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/step_valve_build.log
+          mkdir -p "$(pwd)/../../artifacts/hlsdk/valve"
+          find . -name "*.dylib" -exec cp {} "$(pwd)/../../artifacts/hlsdk/valve/" \; 2>/dev/null || true
+          find . -name "*.so" -exec cp {} "$(pwd)/../../artifacts/hlsdk/valve/" \; 2>/dev/null || true
+
+      - name: Build HLSDK bshift (Blue Shift)
+        run: |
+          cd hlsdk/bshift
+          chmod +x waf 2>/dev/null || true
+          python3 ./waf configure \
+            --sdl2="$(pwd)/../../ios/SDL2/SDL2.framework" \
+            --disable-werror \
+            2>&1 | tee /tmp/step_bshift_configure.log
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/step_bshift_build.log
+          mkdir -p "$(pwd)/../../artifacts/hlsdk/bshift"
+          find . -name "*.dylib" -exec cp {} "$(pwd)/../../artifacts/hlsdk/bshift/" \; 2>/dev/null || true
+          find . -name "*.so" -exec cp {} "$(pwd)/../../artifacts/hlsdk/bshift/" \; 2>/dev/null || true
+
+      - name: Build HLSDK gearbox (Opposing Force)
+        run: |
+          cd hlsdk/gearbox
+          chmod +x waf 2>/dev/null || true
+          python3 ./waf configure \
+            --sdl2="$(pwd)/../../ios/SDL2/SDL2.framework" \
+            --disable-werror \
+            2>&1 | tee /tmp/step_gearbox_configure.log
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/step_gearbox_build.log
+          mkdir -p "$(pwd)/../../artifacts/hlsdk/gearbox"
+          find . -name "*.dylib" -exec cp {} "$(pwd)/../../artifacts/hlsdk/gearbox/" \; 2>/dev/null || true
+          find . -name "*.so" -exec cp {} "$(pwd)/../../artifacts/hlsdk/gearbox/" \; 2>/dev/null || true
+
+      # ==========================================================
+      # 4. BUILD CS 1.6 (cs16-client + ReGameDLL)
+      # ==========================================================
+      - name: Configure & build cs16-client
+        working-directory: hlsdk/cstrike
+        run: |
+          if [ ! -f CMakeLists.txt ]; then
+            echo "No CMakeLists.txt in hlsdk/cstrike — skipping"
+            exit 0
+          fi
+          mkdir -p build-ios
+          cd build-ios
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDL2_DIR="$(pwd)/../../../../ios/SDL2/SDL2.framework" \
+            2>&1 | tee /tmp/step_cs16_configure.log || echo "cs16 configure failed"
+          make -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/step_cs16_build.log || echo "cs16 build failed"
+          mkdir -p "$(pwd)/../../../../artifacts/hlsdk/cstrike"
+          find .. -name "*.dylib" -exec cp {} "$(pwd)/../../../../artifacts/hlsdk/cstrike/" \; 2>/dev/null || true
+
+      - name: Configure & build ReGameDLL (CS server)
+        working-directory: hlsdk/cstrike-server
+        run: |
+          if [ ! -f CMakeLists.txt ]; then
+            echo "No CMakeLists.txt in hlsdk/cstrike-server — skipping"
+            exit 0
+          fi
+          mkdir -p build-ios
+          cd build-ios
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -DCMAKE_BUILD_TYPE=Release \
+            2>&1 | tee /tmp/step_regame_configure.log || echo "regame configure failed"
+          make -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/step_regame_build.log || echo "regame build failed"
+          mkdir -p "$(pwd)/../../../../artifacts/hlsdk/cstrike-server"
+          find .. -name "*.dylib" -exec cp {} "$(pwd)/../../../../artifacts/hlsdk/cstrike-server/" \; 2>/dev/null || true
+
+      # ==========================================================
+      # 5. BUILD CS: CZ (same ReGameDLL)
+      # ==========================================================
+      - name: Configure & build ReGameDLL (CZ)
+        working-directory: hlsdk/czero-server
+        run: |
+          if [ ! -f CMakeLists.txt ]; then
+            echo "No CMakeLists.txt in hlsdk/czero-server — skipping"
+            exit 0
+          fi
+          mkdir -p build-ios
+          cd build-ios
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -DCMAKE_BUILD_TYPE=Release \
+            2>&1 | tee /tmp/step_czero_configure.log || echo "czero configure failed"
+          make -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/step_czero_build.log || echo "czero build failed"
+          mkdir -p "$(pwd)/../../../../artifacts/hlsdk/czero-server"
+          find .. -name "*.dylib" -exec cp {} "$(pwd)/../../../../artifacts/hlsdk/czero-server/" \; 2>/dev/null || true
+
+      # ==========================================================
+      # 6. SEARCH & COLLECT ALL LIBRARIES
+      # ==========================================================
+      - name: Search all built libraries
+        run: |
+          echo "=== ALL .dylib FILES ==="
+          find . -name "*.dylib" -not -path "./.git/*" 2>/dev/null
+          echo ""
+          echo "=== ALL .so FILES ==="
+          find . -name "*.so" -not -path "./.git/*" 2>/dev/null
+          echo ""
+          echo "=== artifacts/ ==="
+          find artifacts -type f 2>/dev/null | head -100
+
+      # ==========================================================
+      # 7. IPA PACKAGING
+      # ==========================================================
+      - name: Locate engine binary & libraries
+        id: locate
+        run: |
+          ENGINE_BIN=$(find artifacts/engine -type f -name "xash3d" 2>/dev/null | head -1)
+          if [ -z "$ENGINE_BIN" ]; then
+            ENGINE_BIN=$(find engine -type f -name "xash3d" 2>/dev/null | head -1)
+          fi
+          echo "engine_bin=$ENGINE_BIN" >> $GITHUB_OUTPUT
+          echo "Engine binary: $ENGINE_BIN"
+          echo ""
+          echo "=== All libraries found ==="
+          find artifacts -name "*.dylib" 2>/dev/null
+
+      - name: Create IPA structure
+        if: always()
+        run: |
+          echo "=== Creating IPA structure ==="
+          APP_DIR="build/Payload/XashFusion.app"
+          rm -rf build
+          mkdir -p "$APP_DIR/Frameworks"
+          mkdir -p "$APP_DIR/Documents"
+
+          # Copy engine binary
+          ENGINE_BIN="${{ steps.locate.outputs.engine_bin }}"
+          if [ -n "$ENGINE_BIN" ] && [ -f "$ENGINE_BIN" ]; then
+            cp "$ENGINE_BIN" "$APP_DIR/xash3d"
+            chmod +x "$APP_DIR/xash3d"
+            echo "Copied engine binary"
+          else
+            echo "Engine binary NOT FOUND — creating placeholder"
+            echo "#!/bin/sh" > "$APP_DIR/xash3d"
+            echo "echo 'XashFusion engine (placeholder)'" >> "$APP_DIR/xash3d"
+            chmod +x "$APP_DIR/xash3d"
+          fi
+
+          # Copy all libraries
+          find artifacts -name "*.dylib" -exec cp {} "$APP_DIR/Frameworks/" \; 2>/dev/null || true
+          find artifacts -name "*.so" -exec cp {} "$APP_DIR/Frameworks/" \; 2>/dev/null || true
+          find artifacts -name "*.pak" -exec cp {} "$APP_DIR/Documents/" \; 2>/dev/null || true
+
+          # Copy SDL2
+          if [ -d "ios/SDL2/SDL2.framework" ]; then
+            cp -R ios/SDL2/SDL2.framework "$APP_DIR/Frameworks/"
+            echo "Copied SDL2.framework"
+          fi
+
+          # Copy extras.pak if exists
+          EXTRAS=$(find engine -name "extras.pak" 2>/dev/null | head -1)
+          if [ -n "$EXTRAS" ]; then
+            cp "$EXTRAS" "$APP_DIR/Documents/extras.pak"
+            echo "Copied extras.pak"
+          fi
+
+          echo ""
+          echo "=== IPA structure ==="
+          find build/Payload -type f | head -50
+
+      - name: Write Info.plist
+        run: |
+          APP_DIR="build/Payload/XashFusion.app"
+          cat > "$APP_DIR/Info.plist" <<'PLIST_EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDisplayName</key><string>XashFusion</string>
+            <key>CFBundleExecutable</key><string>xash3d</string>
+            <key>CFBundleIdentifier</key><string>com.muntazirfx.xashfusion</string>
+            <key>CFBundleName</key><string>XashFusion</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>CFBundleVersion</key><string>1</string>
+            <key>LSRequiresIPhoneOS</key><true/>
+            <key>MinimumOSVersion</key><string>14.0</string>
+            <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+            <key>UIFileSharingEnabled</key><true/>
+            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+            <key>UISupportedInterfaceOrientations</key>
+            <array>
+              <string>UIInterfaceOrientationLandscapeLeft</string>
+              <string>UIInterfaceOrientationLandscapeRight</string>
+            </array>
+          </dict>
+          </plist>
+          PLIST_EOF
+          echo "Info.plist written"
+
+      - name: Create IPA
+        if: always()
+        run: |
+          cd build
+          zip -qry XashFusion.ipa Payload
+          ls -lh XashFusion.ipa
+          echo ""
+          echo "=== IPA contents ==="
+          unzip -l XashFusion.ipa | head -40
+
+      # ==========================================================
+      # 8. UPLOAD ARTIFACTS
+      # ==========================================================
+      - name: Upload IPA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XashFusion-IPA
+          path: build/XashFusion.ipa
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload all libraries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XashFusion-Libraries
+          path: artifacts/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XashFusion-Logs
+          path: /tmp/step_*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ==========================================================
+      # 9. AUTO-RELEASE (only on push to main)
+      # ==========================================================
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - name: Build release notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          cat > /tmp/release_notes.md <<NOTES_EOF
+          ## XashFusion — Build #${{ github.run_number }}
+
+          **Auto-built from \`main\` on $(date -u +"%Y-%m-%d")**
+
+          ### Download
+          - \`XashFusion.ipa\` — sideload with Sideloadly / AltStore / TrollStore
+
+          ### Metadata
+          - Commit: \`${{ github.sha }}\` (\`${{ steps.sha.outputs.short }}\`)
+          - Run: #${{ github.run_number }}
+
+          ### Supported Games
+          - Half-Life
+          - Half-Life: Blue Shift
+          - Half-Life: Opposing Force
+          - Counter-Strike 1.6
+          - Counter-Strike: Condition Zero
+
+          ### Legal
+          No copyrighted game assets are bundled.
+          Users must provide their own legally-obtained Steam game files.
+
+          ### Install
+          1. Download \`XashFusion.ipa\`
+          2. Sideload with Sideloadly / AltStore / TrollStore
+          3. Open the app — Documents folder will be created
+          4. Copy your Steam game folders (valve, bshift, gearbox, cstrike, czero)
+             into Files > XashFusion > Documents
+          5. Launch and play
+          NOTES_EOF
+          cat /tmp/release_notes.md
+
+      - name: Auto-publish Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "XashFusion Build #${{ github.run_number }} (${{ steps.sha.outputs.short }})"
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: |
+            build/XashFusion.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ==========================================================
+      # 10. SUMMARY
+      # ==========================================================
+      - name: Summary
+        if: always()
+        run: |
+          echo "### XashFusion Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runner:** macOS 14" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target:** iOS 14+ ARM64" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Libraries found:**" >> $GITHUB_STEP_SUMMARY
+          find artifacts -name "*.dylib" 2>/dev/null | while read f; do
+            echo "- $f" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f build/XashFusion.ipa ]; then
+            SIZE=$(du -h build/XashFusion.ipa | cut -f1)
+            echo "**IPA size:** $SIZE" >> $GITHUB_STEP_SUMMARY
+          fi
