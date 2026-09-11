@@ -26,9 +26,9 @@ jobs:
           cp -R /tmp/cs16-client/. hlsdk/cstrike/
           echo "cs16-client -> hlsdk/cstrike/"
 
-      - name: Clone ReGameDLL_CS
+      - name: Clone ReGameDLL_CS (s1lentq)
         run: |
-          git clone --depth=1 https://github.com/ReGameDLL/ReGameDLL_CS.git /tmp/regamedll
+          git clone --depth=1 https://github.com/s1lentq/ReGameDLL_CS.git /tmp/regamedll
           rm -rf /tmp/regamedll/.git /tmp/regamedll/.github
           mkdir -p hlsdk/cstrike-server hlsdk/czero-server
           cp -R /tmp/regamedll/. hlsdk/cstrike-server/
@@ -51,5 +51,5 @@ jobs:
           git config user.name  "XashFusion Bot"
           git config user.email "bot@xashfusion.local"
           git add -A
-          git commit -m "Vendor CS sources (cs16-client + ReGameDLL_CS)" || echo "no changes"
+          git commit -m "Vendor CS sources (cs16-client + ReGameDLL_CS from s1lentq)" || echo "no changes"
           git push
