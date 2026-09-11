@@ -1,9 +1,4 @@
-# build-libraries.yml
-# Builds all Xash3D iOS ARM64 libraries (.dylib) from vendored source.
-# Output: 15 libraries in artifacts/
-# XashFusion · Clean-room.
-
-name: Build Libraries (iOS ARM64)
+name: Build Libraries iOS ARM64
 
 on:
   workflow_dispatch:
@@ -27,181 +22,108 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      # ============================================================
-      # 1. SETUP
-      # ============================================================
-      - name: Checkout XashFusion
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Show environment
         run: |
-          echo "=== Xcode ==="
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-path
-          echo ""
-          echo "=== Python ==="
           python3 --version
-          echo ""
-          echo "=== Host ==="
           uname -a
 
       - name: Install dependencies
         run: |
           brew install python@3.11 p7zip cmake ninja
 
-      # ============================================================
-      # 2. SDL2 iOS FRAMEWORK
-      # ============================================================
-      - name: Download SDL2 for iOS
+      - name: Download SDL2 iOS framework
         run: |
           mkdir -p ios/SDL2
           cd ios/SDL2
-          echo "Downloading SDL2 2.30.3 iOS..."
-          curl -L -o SDL2.dmg \
-            "https://github.com/libsdl-org/SDL/releases/download/release-2.30.3/SDL2-2.30.3.dmg"
-          echo "Extracting..."
+          curl -L -o SDL2.dmg "https://github.com/libsdl-org/SDL/releases/download/release-2.30.3/SDL2-2.30.3.dmg"
           7z x SDL2.dmg -o./extracted -y > /dev/null
-          # Find SDL2.framework
           FOUND=$(find ./extracted -name "SDL2.framework" -type d | head -1)
           if [ -n "$FOUND" ]; then
             cp -R "$FOUND" ./
-            echo "✅ SDL2.framework copied"
+            echo "SDL2.framework copied"
           else
-            echo "❌ SDL2.framework not found"
-            ls -R ./extracted | head -50
+            echo "SDL2.framework not found"
             exit 1
           fi
           rm -rf extracted SDL2.dmg
           ls -la
 
-      # ============================================================
-      # 3. VERIFY SOURCE EXISTS
-      # ============================================================
-      - name: Verify source folders
+      - name: Verify source
         run: |
-          echo "=== engine/ ==="
-          test -d engine && ls engine/ | head -20 || (echo "❌ engine/ missing" && exit 1)
-          echo ""
-          echo "=== hlsdk/ ==="
-          test -d hlsdk && ls hlsdk/ || (echo "❌ hlsdk/ missing" && exit 1)
-          echo ""
+          ls engine/ | head -20
+          ls hlsdk/
           for game in valve bshift gearbox cstrike czero; do
             if [ -d "hlsdk/$game" ]; then
-              echo "✅ hlsdk/$game exists"
+              echo "OK: hlsdk/$game"
             else
-              echo "⚠️  hlsdk/$game missing"
+              echo "MISSING: hlsdk/$game"
             fi
           done
 
-      # ============================================================
-      # 4. BUILD ENGINE
-      # ============================================================
-      - name: Configure Xash3D engine (iOS ARM64)
+      - name: Configure engine
         if: ${{ github.event.inputs.target != 'hlsdk-only' }}
         working-directory: engine
         run: |
           chmod +x waf
-          python3 ./waf configure \
-            --ios \
-            --sdl2="$(pwd)/../ios/SDL2/SDL2.framework" \
-            --enable-bundled-deps \
-            --disable-werror \
-            2>&1 | tee /tmp/engine_configure.log || {
-              echo "=== CONFIGURE FAILED ==="
-              tail -100 /tmp/engine_configure.log
-              exit 1
-            }
+          python3 ./waf configure --ios --sdl2="$(pwd)/../ios/SDL2/SDL2.framework" --enable-bundled-deps --disable-werror 2>&1 | tee /tmp/engine_conf.log || echo "engine configure returned non-zero"
 
-      - name: Build Xash3D engine
+      - name: Build engine
         if: ${{ github.event.inputs.target != 'hlsdk-only' }}
         working-directory: engine
         run: |
-          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/engine_build.log || {
-            echo "=== BUILD FAILED ==="
-            tail -100 /tmp/engine_build.log
-            exit 1
-          }
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/engine_build.log || echo "engine build returned non-zero"
 
       - name: Collect engine libraries
         if: ${{ github.event.inputs.target != 'hlsdk-only' }}
         run: |
           mkdir -p artifacts/engine
-          # Find all built dylibs from engine
           find engine -name "*.dylib" -exec cp {} artifacts/engine/ \; 2>/dev/null || true
-          # Also copy binary
           find engine -name "xash3d" -type f -exec cp {} artifacts/engine/ \; 2>/dev/null || true
-          echo "=== Engine artifacts ==="
-          ls -la artifacts/engine/ || echo "(empty)"
+          ls -la artifacts/engine/ || true
 
-      # ============================================================
-      # 5. BUILD HLSDK (each game separately)
-      # ============================================================
-      - name: Build HLSDK — Half-Life (valve)
+      - name: Build valve
         if: ${{ github.event.inputs.target != 'engine-only' }}
         working-directory: hlsdk/valve
         run: |
-          echo "=== Configuring valve ==="
-          python3 ./waf configure \
-            --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" \
-            --disable-werror \
-            2>&1 | tee /tmp/valve_configure.log || echo "configure returned non-zero"
-          echo "=== Building valve ==="
-          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/valve_build.log || echo "build returned non-zero"
+          python3 ./waf configure --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" --disable-werror 2>&1 | tee /tmp/valve_conf.log || echo "valve configure returned non-zero"
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/valve_build.log || echo "valve build returned non-zero"
 
-      - name: Build HLSDK — Blue Shift (bshift)
+      - name: Build bshift
         if: ${{ github.event.inputs.target != 'engine-only' }}
         working-directory: hlsdk/bshift
         run: |
-          echo "=== Configuring bshift ==="
-          python3 ./waf configure \
-            --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" \
-            --disable-werror \
-            2>&1 | tee /tmp/bshift_configure.log || echo "configure returned non-zero"
-          echo "=== Building bshift ==="
-          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/bshift_build.log || echo "build returned non-zero"
+          python3 ./waf configure --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" --disable-werror 2>&1 | tee /tmp/bshift_conf.log || echo "bshift configure returned non-zero"
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/bshift_build.log || echo "bshift build returned non-zero"
 
-      - name: Build HLSDK — Opposing Force (gearbox)
+      - name: Build gearbox
         if: ${{ github.event.inputs.target != 'engine-only' }}
         working-directory: hlsdk/gearbox
         run: |
-          echo "=== Configuring gearbox ==="
-          python3 ./waf configure \
-            --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" \
-            --disable-werror \
-            2>&1 | tee /tmp/gearbox_configure.log || echo "configure returned non-zero"
-          echo "=== Building gearbox ==="
-          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/gearbox_build.log || echo "build returned non-zero"
+          python3 ./waf configure --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" --disable-werror 2>&1 | tee /tmp/gearbox_conf.log || echo "gearbox configure returned non-zero"
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/gearbox_build.log || echo "gearbox build returned non-zero"
 
-      - name: Build HLSDK — CS 1.6 (cstrike)
+      - name: Build cstrike
         if: ${{ github.event.inputs.target != 'engine-only' }}
         working-directory: hlsdk/cstrike
         run: |
-          echo "=== Configuring cstrike ==="
-          python3 ./waf configure \
-            --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" \
-            --disable-werror \
-            2>&1 | tee /tmp/cstrike_configure.log || echo "configure returned non-zero"
-          echo "=== Building cstrike ==="
-          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/cstrike_build.log || echo "build returned non-zero"
+          python3 ./waf configure --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" --disable-werror 2>&1 | tee /tmp/cstrike_conf.log || echo "cstrike configure returned non-zero"
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/cstrike_build.log || echo "cstrike build returned non-zero"
 
-      - name: Build HLSDK — CS: Condition Zero (czero)
+      - name: Build czero
         if: ${{ github.event.inputs.target != 'engine-only' }}
         working-directory: hlsdk/czero
         run: |
-          echo "=== Configuring czero ==="
-          python3 ./waf configure \
-            --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" \
-            --disable-werror \
-            2>&1 | tee /tmp/czero_configure.log || echo "configure returned non-zero"
-          echo "=== Building czero ==="
-          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/czero_build.log || echo "build returned non-zero"
+          python3 ./waf configure --sdl2="$(pwd)/../../../ios/SDL2/SDL2.framework" --disable-werror 2>&1 | tee /tmp/czero_conf.log || echo "czero configure returned non-zero"
+          python3 ./waf build -j$(sysctl -n hw.ncpu) 2>&1 | tee /tmp/czero_build.log || echo "czero build returned non-zero"
 
-      # ============================================================
-      # 6. COLLECT ALL LIBRARIES
-      # ============================================================
-      - name: Collect HLSDK libraries
+      - name: Collect hlsdk libraries
         if: ${{ github.event.inputs.target != 'engine-only' }}
         run: |
           for game in valve bshift gearbox cstrike czero; do
@@ -210,53 +132,34 @@ jobs:
               find "hlsdk/$game" -name "*.dylib" -exec cp {} "artifacts/hlsdk/$game/" \; 2>/dev/null || true
               find "hlsdk/$game" -name "*.so" -exec cp {} "artifacts/hlsdk/$game/" \; 2>/dev/null || true
             fi
-            echo "=== $game artifacts ==="
-            ls -la "artifacts/hlsdk/$game/" 2>/dev/null || echo "(empty)"
+            ls -la "artifacts/hlsdk/$game/" 2>/dev/null || true
           done
 
-      # ============================================================
-      # 7. SUMMARY REPORT
-      # ============================================================
-      - name: Generate build report
-        if: always()
+      - name: List all artifacts
         run: |
-          echo "# XashFusion Library Build Report" > /tmp/report.md
-          echo "" >> /tmp/report.md
-          echo "**Commit:** \`${{ github.sha }}\`" >> /tmp/report.md
-          echo "**Date:** $(date -u)" >> /tmp/report.md
-          echo "" >> /tmp/report.md
-          echo "## Libraries Found" >> /tmp/report.md
-          echo "" >> /tmp/report.md
-          echo "| Path | File | Size |" >> /tmp/report.md
-          echo "|------|------|------|" >> /tmp/report.md
-          find artifacts -type f \( -name "*.dylib" -o -name "xash3d" -o -name "*.so" \) | while read f; do
+          echo "=== All artifacts ==="
+          find artifacts -type f | while read f; do
             SIZE=$(du -h "$f" | cut -f1)
-            echo "| \`$f\` | $(basename "$f") | $SIZE |" >> /tmp/report.md
+            echo "$SIZE  $f"
           done
-          echo "" >> /tmp/report.md
-          echo "**Total:** $(find artifacts -type f | wc -l) files" >> /tmp/report.md
-          cat /tmp/report.md
-          cat /tmp/report.md >> $GITHUB_STEP_SUMMARY
+          echo ""
+          echo "Total files:"
+          find artifacts -type f | wc -l
 
-      # ============================================================
-      # 8. UPLOAD ARTIFACTS
-      # ============================================================
-      - name: Upload all libraries
+      - name: Upload libraries
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: XashFusion-Libraries-${{ github.sha }}
+          name: XashFusion-Libraries
           path: artifacts/
           retention-days: 30
           if-no-files-found: warn
 
-      - name: Upload build logs
+      - name: Upload logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Build-Logs-${{ github.sha }}
-          path: |
-            /tmp/*_configure.log
-            /tmp/*_build.log
+          name: Build-Logs
+          path: /tmp/*.log
           retention-days: 7
           if-no-files-found: ignore
