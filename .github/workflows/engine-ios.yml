@@ -11,6 +11,9 @@ jobs:
     steps:
       - name: Checkout XashFusion
         uses: actions/checkout@v4
+        with:
+         submodules: recursive
+         fetch-depth: 0
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
