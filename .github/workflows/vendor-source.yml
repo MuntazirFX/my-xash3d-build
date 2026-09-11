@@ -41,49 +41,61 @@ jobs:
           ls engine/ | head -30
 
       # --------------------------------------------------
-      # 2. Vendor HLSDK-Portable (all branches)
+      # 2. Vendor HLSDK-Portable (valve = master branch)
       # --------------------------------------------------
-      - name: Clone HLSDK valve
+      - name: Clone HLSDK valve (master)
         run: |
-          git clone --depth=1 --branch valve https://github.com/FWGS/hlsdk-portable.git /tmp/hl-valve
+          git clone --depth=1 --branch master https://github.com/FWGS/hlsdk-portable.git /tmp/hl-valve
           rm -rf /tmp/hl-valve/.git /tmp/hl-valve/.github
           mkdir -p hlsdk/valve
           cp -R /tmp/hl-valve/. hlsdk/valve/
+          echo "hlsdk/valve/ ready"
 
-      - name: Clone HLSDK gearbox
+      # --------------------------------------------------
+      # 3. Vendor HLSDK-Portable (gearbox = opfor branch)
+      # --------------------------------------------------
+      - name: Clone HLSDK gearbox (opfor)
         run: |
           git clone --depth=1 --branch opfor https://github.com/FWGS/hlsdk-portable.git /tmp/hl-gear
           rm -rf /tmp/hl-gear/.git /tmp/hl-gear/.github
           mkdir -p hlsdk/gearbox
           cp -R /tmp/hl-gear/. hlsdk/gearbox/
+          echo "hlsdk/gearbox/ ready"
 
+      # --------------------------------------------------
+      # 4. Vendor HLSDK-Portable (bshift)
+      # --------------------------------------------------
       - name: Clone HLSDK bshift
         run: |
           git clone --depth=1 --branch bshift https://github.com/FWGS/hlsdk-portable.git /tmp/hl-bshift
           rm -rf /tmp/hl-bshift/.git /tmp/hl-bshift/.github
           mkdir -p hlsdk/bshift
           cp -R /tmp/hl-bshift/. hlsdk/bshift/
-
-      - name: Clone HLSDK cstrike + czero
-        if: ${{ github.event.inputs.include_cstrike == 'true' }}
-        run: |
-          git clone --depth=1 --branch cstrike https://github.com/FWGS/hlsdk-portable.git /tmp/hl-cs
-          rm -rf /tmp/hl-cs/.git /tmp/hl-cs/.github
-          mkdir -p hlsdk/cstrike hlsdk/czero
-          cp -R /tmp/hl-cs/. hlsdk/cstrike/
-          cp -R /tmp/hl-cs/. hlsdk/czero/
+          echo "hlsdk/bshift/ ready"
 
       # --------------------------------------------------
-      # 3. Clean up non-iOS platforms
+      # 5. Vendor CS 1.6 + CZ (from cs16-client)
+      # --------------------------------------------------
+      - name: Clone CS16 Client (cstrike + czero)
+        if: ${{ github.event.inputs.include_cstrike == 'true' }}
+        run: |
+          git clone --depth=1 https://github.com/Velaron/cs16-client.git /tmp/cs16
+          rm -rf /tmp/cs16/.git /tmp/cs16/.github
+          mkdir -p hlsdk/cstrike hlsdk/czero
+          cp -R /tmp/cs16/. hlsdk/cstrike/
+          cp -R /tmp/cs16/. hlsdk/czero/
+          echo "hlsdk/cstrike/ + hlsdk/czero/ ready"
+
+      # --------------------------------------------------
+      # 6. Clean up non-iOS platforms
       # --------------------------------------------------
       - name: Remove non-iOS platforms
         run: |
-          # Engine platforms
           find engine -type d \( -name "android" -o -name "win32" -o -name "linux" -o -name "bsd" -o -name "switch" -o -name "psvita" -o -name "dos" -o -name "emscripten" -o -name "haiku" -o -name "serenityos" \) -exec rm -rf {} + 2>/dev/null || true
           echo "Cleaned non-iOS platforms"
 
       # --------------------------------------------------
-      # 4. Create placeholder ios/ folder
+      # 7. Create placeholder ios/ folder
       # --------------------------------------------------
       - name: Create ios folder
         run: |
@@ -92,7 +104,7 @@ jobs:
           touch ios/SDL2/.gitkeep
 
       # --------------------------------------------------
-      # 5. Show final structure
+      # 8. Show final structure
       # --------------------------------------------------
       - name: Show final tree
         run: |
@@ -109,7 +121,7 @@ jobs:
           find . -type f -not -path "./.git/*" | wc -l
 
       # --------------------------------------------------
-      # 6. Commit + push
+      # 9. Commit + push
       # --------------------------------------------------
       - name: Commit and push
         run: |
