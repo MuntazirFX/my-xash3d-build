@@ -14,18 +14,20 @@ jobs:
 
     steps:
 
-      # ---------------------------------------------------------
-      # 1. CHECKOUT XASHFUSION
-      # ---------------------------------------------------------
+      # =========================================================
+      # 1. CHECKOUT
+      # =========================================================
+
       - name: Checkout XashFusion
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
 
-      # ---------------------------------------------------------
+      # =========================================================
       # 2. VERIFY REPOSITORY
-      # ---------------------------------------------------------
+      # =========================================================
+
       - name: Verify repository
         run: |
           set -euxo pipefail
@@ -40,21 +42,17 @@ jobs:
           ls -la engine
 
           echo "===== HLSDK ====="
-          if [ -d "hlsdk" ]; then
+          if [ -d hlsdk ]; then
             ls -la hlsdk
           else
-            echo "HLSDK directory not present in XashFusion root"
+            echo "HLSDK directory not found"
           fi
 
-          echo "===== IOS ====="
-          if [ -d "ios" ]; then
-            find ios -maxdepth 2 -print
-          fi
-
-      # ---------------------------------------------------------
+      # =========================================================
       # 3. INITIALIZE ENGINE SUBMODULES
-      # ---------------------------------------------------------
-      - name: Initialize all engine submodules
+      # =========================================================
+
+      - name: Initialize engine submodules
         working-directory: engine
         run: |
           set -euxo pipefail
@@ -66,16 +64,21 @@ jobs:
           git submodule status --recursive
 
           echo "===== LIBBACKTRACE ====="
-          test -d 3rdparty/libbacktrace
+
+          if [ ! -d 3rdparty/libbacktrace ]; then
+            echo "ERROR: libbacktrace directory missing"
+            exit 1
+          fi
 
           find 3rdparty/libbacktrace \
             -maxdepth 2 \
             -print \
             | head -100
 
-      # ---------------------------------------------------------
+      # =========================================================
       # 4. VERIFY LIBBACKTRACE
-      # ---------------------------------------------------------
+      # =========================================================
+
       - name: Verify libbacktrace
         working-directory: engine
         run: |
@@ -83,15 +86,12 @@ jobs:
 
           test -d 3rdparty/libbacktrace
 
-          echo "libbacktrace directory exists"
+          echo "libbacktrace OK"
 
-          if [ -d "3rdparty/libbacktrace/.git" ]; then
-            echo "libbacktrace is initialized"
-          fi
+      # =========================================================
+      # 5. XCODE
+      # =========================================================
 
-      # ---------------------------------------------------------
-      # 5. SELECT XCODE
-      # ---------------------------------------------------------
       - name: Select Xcode
         run: |
           set -euxo pipefail
@@ -99,12 +99,15 @@ jobs:
           sudo xcode-select \
             -s /Applications/Xcode.app/Contents/Developer
 
+          echo "===== XCODE ====="
+
           xcodebuild -version
           xcode-select -p
 
-      # ---------------------------------------------------------
-      # 6. INSTALL DEPENDENCIES
-      # ---------------------------------------------------------
+      # =========================================================
+      # 6. DEPENDENCIES
+      # =========================================================
+
       - name: Install dependencies
         run: |
           set -euxo pipefail
@@ -120,17 +123,10 @@ jobs:
           cmake --version
           pkg-config --version
 
-      # ---------------------------------------------------------
-      # 7. CHECK SDL VERSION
-      # ---------------------------------------------------------
-      - name: Show SDL version
-        run: |
-          echo "SDL_VERSION=${SDL_VERSION}"
-          echo "IOS_DEPLOYMENT_TARGET=${IOS_DEPLOYMENT_TARGET}"
+      # =========================================================
+      # 7. SDL2
+      # =========================================================
 
-      # ---------------------------------------------------------
-      # 8. DOWNLOAD SDL2
-      # ---------------------------------------------------------
       - name: Checkout SDL2
         run: |
           set -euxo pipefail
@@ -145,28 +141,29 @@ jobs:
 
           cd "$RUNNER_TEMP/SDL"
 
-          echo "===== SDL COMMIT ====="
+          echo "===== SDL VERSION ====="
+          git describe --tags --always
           git rev-parse HEAD
 
-      # ---------------------------------------------------------
-      # 9. LIST SDL XCODE PROJECT
-      # ---------------------------------------------------------
+      # =========================================================
+      # 8. SHOW SDL PROJECT
+      # =========================================================
+
       - name: Inspect SDL Xcode project
         run: |
           set -euxo pipefail
 
           cd "$RUNNER_TEMP/SDL"
 
-          echo "===== SDL PROJECT ====="
-
           xcodebuild \
             -project Xcode/SDL/SDL.xcodeproj \
             -list
 
-      # ---------------------------------------------------------
-      # 10. BUILD SDL2 XCFRAMEWORK FOR iOS ARM64
-      # ---------------------------------------------------------
-      - name: Build SDL2 for iOS ARM64
+      # =========================================================
+      # 9. BUILD SDL2 XCFRAMEWORK
+      # =========================================================
+
+      - name: Build SDL2 iOS ARM64
         run: |
           set -euxo pipefail
 
@@ -185,30 +182,32 @@ jobs:
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             build
 
-      # ---------------------------------------------------------
-      # 11. FIND SDL2 FRAMEWORK
-      # ---------------------------------------------------------
+      # =========================================================
+      # 10. LOCATE SDL2
+      # =========================================================
+
       - name: Locate SDL2 framework
         run: |
           set -euxo pipefail
 
-          echo "===== SEARCHING SDL2 FRAMEWORK ====="
+          echo "===== FRAMEWORKS ====="
 
           find "$RUNNER_TEMP/SDL" \
             -type d \
-            -name "SDL2.framework" \
+            -name "*.framework" \
             -print
 
-          echo "===== SDL2 BINARY ====="
+          echo "===== SDL2 BINARIES ====="
 
           find "$RUNNER_TEMP/SDL" \
             -type f \
             -name "SDL2" \
             -print
 
-      # ---------------------------------------------------------
-      # 12. PREPARE SDL2
-      # ---------------------------------------------------------
+      # =========================================================
+      # 11. PREPARE SDL2
+      # =========================================================
+
       - name: Prepare SDL2 framework
         run: |
           set -euxo pipefail
@@ -224,10 +223,10 @@ jobs:
           )"
 
           if [ -z "$SDL_FRAMEWORK" ]; then
-            echo "ERROR: SDL2.framework was not found"
+
+            echo "ERROR: SDL2.framework not found"
 
             find "$RUNNER_TEMP/SDL" \
-              -maxdepth 10 \
               -type d \
               -name "*.framework" \
               -print
@@ -235,7 +234,8 @@ jobs:
             exit 1
           fi
 
-          echo "SDL_FRAMEWORK=$SDL_FRAMEWORK"
+          echo "===== SDL FRAMEWORK ====="
+          echo "$SDL_FRAMEWORK"
 
           rm -rf \
             "$GITHUB_WORKSPACE/build/SDL2/SDL2.framework"
@@ -247,23 +247,25 @@ jobs:
           test -f \
             "$GITHUB_WORKSPACE/build/SDL2/SDL2.framework/SDL2"
 
-          echo "===== SDL2 MACH-O ====="
+          echo "===== SDL2 BINARY ====="
 
           file \
             "$GITHUB_WORKSPACE/build/SDL2/SDL2.framework/SDL2"
 
-      # ---------------------------------------------------------
-      # 13. CONFIGURE XASH3D-FWGS
-      # ---------------------------------------------------------
+      # =========================================================
+      # 12. CONFIGURE XASH3D-FWGS
+      # =========================================================
+
       - name: Configure Xash3D-FWGS iOS ARM64
         working-directory: engine
         run: |
           set -euxo pipefail
 
-          echo "===== WAF VERSION ====="
+          echo "===== WAF ====="
+
           ./waf --version
 
-          echo "===== CONFIGURE XASH3D-FWGS ====="
+          echo "===== CONFIGURE ====="
 
           ./waf configure \
             --ios \
@@ -272,9 +274,10 @@ jobs:
             --enable-lto \
             --sdl2="$GITHUB_WORKSPACE/build/SDL2/SDL2.framework"
 
-      # ---------------------------------------------------------
-      # 14. BUILD ENGINE
-      # ---------------------------------------------------------
+      # =========================================================
+      # 13. BUILD ENGINE
+      # =========================================================
+
       - name: Build Xash3D-FWGS ARM64
         working-directory: engine
         run: |
@@ -286,16 +289,11 @@ jobs:
             -v \
             -j2
 
-      # ---------------------------------------------------------
-      # 15. CREATE INSTALL DIRECTORY
-      # ---------------------------------------------------------
-      # IMPORTANT:
-      # This fixes:
-      #
-      # realpath build/ios:
-      # No such file or directory
-      # ---------------------------------------------------------
-      - name: Install Xash3D-FWGS ARM64
+      # =========================================================
+      # 14. CREATE INSTALL DIRECTORY
+      # =========================================================
+
+      - name: Install Xash3D-FWGS
         working-directory: engine
         run: |
           set -euxo pipefail
@@ -316,9 +314,10 @@ jobs:
           ./waf install \
             --destdir="$GITHUB_WORKSPACE/build/xash-install"
 
-      # ---------------------------------------------------------
-      # 16. INSPECT ENGINE OUTPUT
-      # ---------------------------------------------------------
+      # =========================================================
+      # 15. INSPECT ENGINE OUTPUT
+      # =========================================================
+
       - name: Inspect engine output
         run: |
           set -euxo pipefail
@@ -339,10 +338,11 @@ jobs:
             | grep -E "Mach-O" \
             || true
 
-      # ---------------------------------------------------------
-      # 17. VERIFY ARM64 ENGINE
-      # ---------------------------------------------------------
-      - name: Verify ARM64 engine binary
+      # =========================================================
+      # 16. VERIFY ARM64
+      # =========================================================
+
+      - name: Verify ARM64 engine
         run: |
           set -euxo pipefail
 
@@ -368,16 +368,17 @@ jobs:
           )
 
           if [ "$ENGINE_FOUND" -eq 0 ]; then
-            echo "ERROR: No ARM64 Mach-O engine binary found"
+            echo "ERROR: No ARM64 Mach-O binary found"
             exit 1
           fi
 
-          echo "ARM64 engine binary verified"
+          echo "ARM64 engine verified"
 
-      # ---------------------------------------------------------
-      # 18. CHECK HLSDK
-      # ---------------------------------------------------------
-      - name: Check Half-Life SDK
+      # =========================================================
+      # 17. CHECK HLSDK
+      # =========================================================
+
+      - name: Check HLSDK source
         run: |
           set -euxo pipefail
 
@@ -401,9 +402,10 @@ jobs:
 
           done
 
-      # ---------------------------------------------------------
-      # 19. PREPARE ENGINE ARTIFACT
-      # ---------------------------------------------------------
+      # =========================================================
+      # 18. PREPARE ARTIFACT
+      # =========================================================
+
       - name: Prepare engine artifact
         run: |
           set -euxo pipefail
@@ -421,16 +423,17 @@ jobs:
             build/SDL2/SDL2.framework \
             artifacts/xash3d/
 
-          echo "===== ARTIFACT ====="
+          echo "===== ARTIFACT CONTENTS ====="
 
           find artifacts/xash3d \
             -type f \
             -print \
             | sort
 
-      # ---------------------------------------------------------
-      # 20. CREATE ENGINE ARCHIVE
-      # ---------------------------------------------------------
+      # =========================================================
+      # 19. CREATE ARCHIVE
+      # =========================================================
+
       - name: Create engine archive
         run: |
           set -euxo pipefail
@@ -447,9 +450,10 @@ jobs:
           ls -lh \
             XashFusion-iOS-ARM64-engine.tar.gz
 
-      # ---------------------------------------------------------
-      # 21. UPLOAD ENGINE ARTIFACT
-      # ---------------------------------------------------------
+      # =========================================================
+      # 20. UPLOAD ARTIFACT
+      # =========================================================
+
       - name: Upload engine artifact
         uses: actions/upload-artifact@v4
         with:
